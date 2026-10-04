@@ -190,7 +190,7 @@ export function timeSeries(container, opts) {
  * opts: { names: string[], times: ms[], state: (name, i) => string|undefined, colors: {state: color}, interval }
  */
 export function lanes(container, opts) {
-  const { names, times, state, colors, onClick } = opts;
+  const { names, times, state, colors, onClick, label: labelOf = (n) => n } = opts;
   container.classList.add('chart');
   const old = container.querySelector(':scope > svg');
   const width = Math.max(container.clientWidth, 200);
@@ -202,7 +202,7 @@ export function lanes(container, opts) {
   const svg = el('svg', { viewBox: `0 0 ${width} ${height}`, height, role: 'img', 'aria-label': 'Sprite state over time' });
   swap(container, old, svg);
   if (!times.length || !names.length) {
-    el('text', { x: m.l + w / 2, y: height / 2, 'text-anchor': 'middle' }, svg).textContent = names.length ? 'Collecting samples…' : 'No sprites yet';
+    el('text', { x: m.l + w / 2, y: height / 2, 'text-anchor': 'middle' }, svg).textContent = names.length ? 'Collecting samples…' : 'No sandboxes yet';
     return;
   }
   const n = times.length;
@@ -214,7 +214,8 @@ export function lanes(container, opts) {
   names.forEach((name, row) => {
     const y0 = m.t + row * (lane + gap);
     const label = el('text', { class: 'lane-label', x: m.l - 10, y: y0 + lane / 2 + 4, 'text-anchor': 'end' }, svg);
-    label.textContent = name.length > 20 ? name.slice(0, 19) + '…' : name;
+    const text = labelOf(name);
+    label.textContent = text.length > 20 ? text.slice(0, 19) + '…' : text;
     el('rect', { x: m.l, y: y0, width: w, height: lane, rx: 4, fill: 'var(--surface-2)' }, svg);
     // Runs of one state become one rect, with a 2px surface gap between runs.
     let i = 0;
@@ -229,7 +230,7 @@ export function lanes(container, opts) {
         rect.addEventListener('pointermove', (ev) => {
           const r = svg.getBoundingClientRect();
           const mins = Math.max(1, Math.round((to - from) / 60000));
-          tip.innerHTML = tipRows(name, [{ label: s, color: colors[s], value: `${fmtTime(from)}–${fmtTime(to)} · ${mins} min`, square: true }]);
+          tip.innerHTML = tipRows(text, [{ label: s, color: colors[s], value: `${fmtTime(from)}–${fmtTime(to)} · ${mins} min`, square: true }]);
           placeTip(container, tip, ev.clientX - r.left, ev.clientY - r.top);
         });
         rect.addEventListener('pointerleave', () => { tip.hidden = true; });

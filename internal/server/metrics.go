@@ -9,8 +9,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/arugula-salad/sandpit/internal/store"
 )
 
 // The web UI's history: a sampler keeps the last hour of host and per-sprite
@@ -126,10 +124,10 @@ func (m *metrics) sample(now time.Time) {
 	elapsed := now.Sub(m.last).Seconds()
 	ticks := map[int]int64{}
 	states := map[string]string{}
-	sprites := m.s.store.List(store.Sprites, "")
+	sprites := m.s.store.All()
 	for _, sp := range sprites {
 		state := l.Status(sp.Record)
-		states[sp.Name] = state
+		states[statusName(sp)] = state
 		switch state {
 		case "running":
 			p.Running++
@@ -139,7 +137,7 @@ func (m *metrics) sample(now time.Time) {
 			p.Cold++
 		}
 		pt := SpritePoint{State: state}
-		p.Sprites[sp.Name] = pt
+		p.Sprites[statusName(sp)] = pt
 		vm := l.Peek(sp.ID)
 		if !vm.Running() {
 			continue
@@ -153,7 +151,7 @@ func (m *metrics) sample(now time.Time) {
 		if prev, ok := m.ticks[pr.pid]; ok && elapsed > 0 && pr.cpuTicks >= prev {
 			pt.CPU = float64(pr.cpuTicks-prev) / clockTicksHz / elapsed
 		}
-		p.Sprites[sp.Name] = pt
+		p.Sprites[statusName(sp)] = pt
 		p.VMMRSS += pt.RSS
 		p.CPU += pt.CPU
 	}
@@ -168,7 +166,7 @@ func (m *metrics) sample(now time.Time) {
 	// written here, under sampling, so reading it needs no m.mu.)
 	stale := now.Sub(m.diskAt) >= diskEvery || len(m.disk) != len(sprites)
 	for _, sp := range sprites {
-		if _, ok := m.disk[sp.Name]; !ok {
+		if _, ok := m.disk[statusName(sp)]; !ok {
 			stale = true
 		}
 	}
@@ -176,7 +174,7 @@ func (m *metrics) sample(now time.Time) {
 	if stale {
 		st := make([]SpriteStatus, len(sprites))
 		for i, sp := range sprites {
-			st[i] = SpriteStatus{Name: sp.Name, ID: sp.ID}
+			st[i] = SpriteStatus{Name: statusName(sp), ID: sp.ID}
 		}
 		diskUsage(m.s.store, filepath.Join(m.s.opts.DataDir, "vm"), st)
 		disk = map[string]SpriteDisk{}

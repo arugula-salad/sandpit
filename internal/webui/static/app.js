@@ -184,15 +184,35 @@ async function listSprites() {
   }
 }
 
-// Joined per-sprite view: API record + operator status + disk figures.
+// Every API the daemon serves keeps its sandboxes in the one store. Status and
+// the metrics call a sprite by its name and any other sandbox "<provider>:<id>".
+const PROVIDERS = { sprites: 'Sprites', e2b: 'E2B', vercel: 'Vercel', daytona: 'Daytona', modal: 'Modal' };
+const providerName = (p) => PROVIDERS[p] || p;
+const isSprite = (r) => r.provider === 'sprites';
+// labelOf is what the page shows for a status name: the sprite's name, or the
+// provider and what that API calls the sandbox (its ID when it has no name).
+function labelOf(name) {
+  const i = name.indexOf(':');
+  if (i < 0) return name;
+  const s = (data.status?.sprites || []).find((x) => x.name === name);
+  return `${providerName(name.slice(0, i))} · ${s?.label || name.slice(i + 1)}`;
+}
+const displayName = (r) => (isSprite(r) ? r.name : r.label || r.id);
+
+// Joined per-sandbox view: operator status + disk figures, and for a sprite its
+// API record (api); another API's sandbox has status alone (api is null).
 function spriteRows() {
   const st = new Map((data.status?.sprites || []).map((s) => [s.name, s]));
-  return [...data.sprites.values()].map((a) => {
-    const s = st.get(a.name) || {};
-    const d = data.metrics.disk?.[a.name] || {};
-    return { ...a, ...s, api: a, state: s.state || a.status, disk_used: s.disk_used_bytes ?? d.disk_used_bytes ?? 0,
+  const row = (a, s) => {
+    const d = data.metrics.disk?.[s.name ?? a.name] || {};
+    return { ...a, ...s, provider: s.provider || 'sprites', api: a, state: s.state || a?.status,
+      created_at: a?.created_at ?? s.created_at, last_running_at: a?.last_running_at ?? s.last_running_at,
+      disk_used: s.disk_used_bytes ?? d.disk_used_bytes ?? 0,
       disk_exclusive: s.disk_exclusive_bytes ?? d.disk_exclusive_bytes ?? 0, disk_apparent: s.disk_apparent_bytes ?? d.disk_apparent_bytes ?? 0 };
-  });
+  };
+  const rows = [...data.sprites.values()].map((a) => row(a, st.get(a.name) || {}));
+  for (const s of st.values()) if (s.provider) rows.push(row(null, s));
+  return rows;
 }
 const series = (fn) => data.metrics.points.map(fn);
 const spriteSeries = (name, key) => series((p) => p.sprites?.[name]?.[key] ?? 0);
@@ -359,18 +379,18 @@ function Overview(root) {
     <div class="grid kpis" id="ov-kpis"></div>
     ${tabbed('overview', [
     ['activity', 'Activity', html`<div class="grid two">
-      <section class="card"><header><h2>Sprite states</h2><span class="note">stacked count · last hour</span></header>
+      <section class="card"><header><h2>Sandbox states</h2><span class="note">stacked count · last hour</span></header>
         <div id="ch-states"></div><div id="lg-states"></div></section>
       <section class="card"><header><h2>Recent changes</h2><span class="note">state transitions seen by the sampler</span></header><ul class="feed" id="feed"></ul></section>
     </div>
-    <section class="card" style="margin-bottom:16px"><header><h2>Activity</h2><span class="note">each sprite's state over the last hour · click a lane to open</span></header>
+    <section class="card" style="margin-bottom:16px"><header><h2>Activity</h2><span class="note">each sandbox's state over the last hour · click a lane to open</span></header>
       <div id="ch-lanes"></div><div id="lg-lanes"></div></section>`],
     ['resources', 'CPU & memory', html`<div class="grid two">
       <section class="card"><header><h2>CPU</h2><span class="note" id="cpu-note">cores busy across all VMs</span></header><div id="ch-cpu"></div></section>
       <section class="card"><header><h2>Memory</h2><span class="note">resident memory of all VMs</span></header><div id="ch-mem"></div></section>
     </div>
-    <section class="card" style="margin-bottom:16px"><header><h2>Memory by sprite</h2><span class="note">running VMs, now</span></header><div id="ch-membar"></div></section>`],
-    ['disk', 'Disk', html`<section class="card" style="margin-bottom:16px"><header><h2>Disk by sprite</h2><span class="note" id="disk-note"></span></header><div id="ch-disk"></div><div id="lg-disk"></div></section>`],
+    <section class="card" style="margin-bottom:16px"><header><h2>Memory by sandbox</h2><span class="note">running VMs, now</span></header><div id="ch-membar"></div></section>`],
+    ['disk', 'Disk', html`<section class="card" style="margin-bottom:16px"><header><h2>Disk by sandbox</h2><span class="note" id="disk-note"></span></header><div id="ch-disk"></div><div id="lg-disk"></div></section>`],
   ])}`);
   wireActions(root);
   wireTabs(root, () => this_.update());
@@ -379,7 +399,9 @@ function Overview(root) {
       const st = data.status, h = st.host, pts = data.metrics.points, last = pts.at(-1) || {};
       const rows = spriteRows();
       const cores = data.metrics.host_cores;
-      $('#ov-sub').textContent = `${rows.length} sprite${rows.length === 1 ? '' : 's'} · daemon up ${st.daemon ? dur(Date.now() - new Date(st.daemon.started_at)) : '—'} · ${h.data_dir}`;
+      const byProvider = Object.entries(rows.reduce((m, r) => ({ ...m, [r.provider]: (m[r.provider] || 0) + 1 }), {}))
+        .map(([p, n]) => `${n} ${providerName(p)}`).join(', ');
+      $('#ov-sub').textContent = `${rows.length} sandbox${rows.length === 1 ? '' : 'es'}${byProvider ? ` (${byProvider})` : ''} · daemon up ${st.daemon ? dur(Date.now() - new Date(st.daemon.started_at)) : '—'} · ${h.data_dir}`;
 
       const stateParts = [
         { label: 'Running', value: h.running, color: STATE_COLORS.running },
@@ -387,7 +409,7 @@ function Overview(root) {
         { label: 'Cold', value: h.cold, color: STATE_COLORS.cold }];
       const volUsed = h.volume.volume_total_bytes - h.volume.volume_free_bytes;
       $('#ov-kpis').innerHTML = [
-        stat({ label: 'Sprites', value: rows.length, hero: true, foot: html`${meter(stateParts, true)}${legend(stateParts)}` }),
+        stat({ label: 'Sandboxes', value: rows.length, hero: true, foot: html`${meter(stateParts, true)}${legend(stateParts)}` }),
         stat({ label: 'CPU in use', value: fmtCores(last.cpu_cores || 0), unit: 'cores', foot: `of ${cores} host cores · load ${(last.load1 ?? 0).toFixed(2)}`, sparkId: 'sp-cpu' }),
         stat({ label: 'VM memory', value: fmtBytes(last.vmm_rss_bytes || 0), foot: `host ${fmtBytes(last.host_mem_used_bytes)} of ${fmtBytes(last.host_mem_total_bytes)} used`, sparkId: 'sp-mem' }),
         stat({ label: 'Sprite volume', value: fmtPct(volUsed / (h.volume.volume_total_bytes || 1)), unit: 'used',
@@ -401,7 +423,7 @@ function Overview(root) {
       putSpark('sp-mem', recent(series((p) => p.vmm_rss_bytes), 120), 'var(--s-running)');
 
       const times = data.times, interval = data.metrics.interval_seconds * 1000;
-      timeSeries($('#ch-states'), { times, interval, stacked: true, height: 190, label: 'Sprites by state over time',
+      timeSeries($('#ch-states'), { times, interval, stacked: true, height: 190, label: 'Sandboxes by state over time',
         series: [{ label: 'Cold', color: STATE_COLORS.cold, values: series((p) => p.cold) },
           { label: 'Warm', color: STATE_COLORS.warm, values: series((p) => p.warm) },
           { label: 'Running', color: STATE_COLORS.running, values: series((p) => p.running) }],
@@ -414,29 +436,29 @@ function Overview(root) {
 
       // Lanes: running first, then by name.
       const order = { running: 0, warm: 1, cold: 2 };
-      const names = rows.slice().sort((a, b) => (order[a.state] - order[b.state]) || a.name.localeCompare(b.name)).map((r) => r.name);
-      lanes($('#ch-lanes'), { names, times, interval, colors: STATE_COLORS,
+      const names = rows.slice().sort((a, b) => (order[a.state] - order[b.state]) || labelOf(a.name).localeCompare(labelOf(b.name))).map((r) => r.name);
+      lanes($('#ch-lanes'), { names, times, interval, colors: STATE_COLORS, label: labelOf,
         state: (name, i) => pts[i].sprites?.[name]?.state, onClick: (n) => { location.hash = `#/s/${encodeURIComponent(n)}`; } });
       $('#lg-lanes').innerHTML = String(legend(stateParts.map((p) => ({ ...p, value: '' })), () => ''));
 
       const running = rows.filter((r) => r.vmm_rss_bytes > 0).sort((a, b) => b.vmm_rss_bytes - a.vmm_rss_bytes).slice(0, 10);
-      bars($('#ch-membar'), { rows: running.map((r) => ({ label: r.name, href: `#/s/${encodeURIComponent(r.name)}`,
-        segments: [{ label: 'Resident memory', value: r.vmm_rss_bytes, color: 'var(--s-running)' }] })), format: (v) => fmtBytes(v, 0), empty: 'No sprite is running' });
+      bars($('#ch-membar'), { rows: running.map((r) => ({ label: labelOf(r.name), href: `#/s/${encodeURIComponent(r.name)}`,
+        segments: [{ label: 'Resident memory', value: r.vmm_rss_bytes, color: 'var(--s-running)' }] })), format: (v) => fmtBytes(v, 0), empty: 'Nothing is running' });
 
       const disk = rows.filter((r) => r.disk_used > 0).sort((a, b) => b.disk_used - a.disk_used).slice(0, 10);
-      bars($('#ch-disk'), { rows: disk.map((r) => ({ label: r.name, href: `#/s/${encodeURIComponent(r.name)}`,
-        segments: [{ label: 'Only this sprite', value: r.disk_exclusive, color: 'var(--s-7)' },
+      bars($('#ch-disk'), { rows: disk.map((r) => ({ label: labelOf(r.name), href: `#/s/${encodeURIComponent(r.name)}`,
+        segments: [{ label: 'Only this sandbox', value: r.disk_exclusive, color: 'var(--s-7)' },
           { label: 'Shared (clones, base image)', value: Math.max(0, r.disk_used - r.disk_exclusive), color: 'var(--s-6)' }] })),
         format: (v) => fmtBytes(v, 0), empty: 'No disk figures yet' });
-      $('#lg-disk').innerHTML = String(legend([{ label: 'Only this sprite (freed on delete)', color: 'var(--s-7)', value: '' }, { label: 'Shared blocks', color: 'var(--s-6)', value: '' }], () => ''));
+      $('#lg-disk').innerHTML = String(legend([{ label: 'Only this sandbox (freed on delete)', color: 'var(--s-7)', value: '' }, { label: 'Shared blocks', color: 'var(--s-6)', value: '' }], () => ''));
       $('#disk-note').textContent = h.reflink ? 'disk + checkpoints, shared blocks counted once' : 'disk + checkpoints';
 
       const ev = data.metrics.events.slice(-40).reverse();
       const feed = $('#feed'), feedTop = feed.scrollTop; // the feed scrolls on its own; keep its place
       feed.innerHTML = ev.length ? ev.map((e) => String(html`<li><time>${fmtTime(e.t)}</time>
-        <a class="mono" href="#/s/${encodeURIComponent(e.name)}">${e.name}</a>
+        <a class="mono" href="#/s/${encodeURIComponent(e.name)}">${labelOf(e.name)}</a>
         ${e.from ? stateBadge(e.from) : html`<span class="pill">created</span>`}<span class="arrow">→</span>${e.to ? stateBadge(e.to) : html`<span class="pill bad">deleted</span>`}</li>`)).join('')
-        : '<li class="faint">No changes yet. Transitions show up here as sprites wake and sleep.</li>';
+        : '<li class="faint">No changes yet. Transitions show up here as sandboxes wake and sleep.</li>';
       feed.scrollTop = feedTop;
     },
   };
@@ -445,15 +467,16 @@ function Overview(root) {
 
 // ---------- Sprites list ----------
 
-let listFilter = '', listState = '';
+let listFilter = '', listState = '', listProvider = '';
 function SpritesView(root) {
   root.innerHTML = String(html`
-    <div class="page-head"><div><h1>Sprites</h1><div class="sub" id="sl-sub"></div></div>
-      <div class="actions"><input id="sl-q" placeholder="Filter by name…" style="width:200px" value="${listFilter}">
+    <div class="page-head"><div><h1>Sandboxes</h1><div class="sub" id="sl-sub"></div></div>
+      <div class="actions"><input id="sl-q" placeholder="Filter by name or ID…" style="width:200px" value="${listFilter}">
+      <div class="range" id="sl-provider"></div>
       <div class="range" id="sl-state">${['', 'running', 'warm', 'cold'].map((s) => html`<button data-s="${s}" class="${s === listState ? 'on' : ''}">${s || 'All'}</button>`)}</div>
       <button class="primary" data-act="new">＋ New sprite</button></div></div>
     <section class="card"><div class="table-wrap"><table>
-      <thead><tr><th>Name</th><th>State</th><th>CPU · 10 min</th><th class="num">Memory</th><th class="num">Disk</th><th class="num">Checkpoints</th><th>Last running</th><th>URL</th><th></th></tr></thead>
+      <thead><tr><th>Name</th><th>Provider</th><th>State</th><th>CPU · 10 min</th><th class="num">Memory</th><th class="num">Disk</th><th class="num">Checkpoints</th><th>Last running</th><th>URL</th><th></th></tr></thead>
       <tbody id="sl-body"></tbody></table></div></section>`);
   wireActions(root);
   $('#sl-q').oninput = (e) => { listFilter = e.target.value; this_.update(); };
@@ -463,6 +486,11 @@ function SpritesView(root) {
     root.querySelectorAll('#sl-state button').forEach((x) => x.classList.toggle('on', x === b));
     this_.update();
   };
+  $('#sl-provider').onclick = (e) => {
+    const b = e.target.closest('button'); if (!b) return;
+    listProvider = b.dataset.p;
+    this_.update();
+  };
   $('#sl-body').addEventListener('click', (e) => {
     if (e.target.closest('a,button')) return;
     const tr = e.target.closest('tr[data-name]');
@@ -470,21 +498,27 @@ function SpritesView(root) {
   });
   const this_ = {
     update() {
-      const all = spriteRows().sort((a, b) => a.name.localeCompare(b.name));
-      const rows = all.filter((r) => r.name.includes(listFilter.trim().toLowerCase()) && (!listState || r.state === listState));
+      const all = spriteRows().sort((a, b) => a.provider.localeCompare(b.provider) || displayName(a).localeCompare(displayName(b)));
+      const providers = [...new Set(all.map((r) => r.provider))];
+      if (listProvider && !providers.includes(listProvider)) listProvider = '';
+      $('#sl-provider').innerHTML = providers.length > 1 ? ['', ...providers].map((p) => String(html`<button data-p="${p}" class="${p === listProvider ? 'on' : ''}">${p ? providerName(p) : 'All providers'}</button>`)).join('') : '';
+      const q = listFilter.trim().toLowerCase();
+      const rows = all.filter((r) => (!q || [r.name, r.label, r.id].some((x) => x?.toLowerCase().includes(q)))
+        && (!listState || r.state === listState) && (!listProvider || r.provider === listProvider));
       $('#sl-sub').textContent = `${all.length} total · showing ${rows.length}`;
       const body = $('#sl-body');
-      if (!rows.length) { body.innerHTML = `<tr><td colspan="9" class="empty">${all.length ? 'No sprite matches.' : 'No sprites yet. Create one to get started.'}</td></tr>`; return; }
+      if (!rows.length) { body.innerHTML = `<tr><td colspan="10" class="empty">${all.length ? 'No sandbox matches.' : 'No sandboxes yet. Create a sprite, or one through any of the other APIs.'}</td></tr>`; return; }
       body.innerHTML = rows.map((r) => String(html`<tr class="link" data-name="${r.name}">
-        <td><a class="name" href="#/s/${encodeURIComponent(r.name)}">${r.name}</a>${r.parent_id ? html` <span class="pill" title="Created from inside another sprite">child</span>` : ''}${r.policy_restricted ? html` <span class="pill" title="Egress goes through a network policy">policy</span>` : ''}</td>
+        <td><a class="name${isSprite(r) ? '' : ' mono'}" href="#/s/${encodeURIComponent(r.name)}" title="${r.id}">${displayName(r)}</a>${r.parent_id ? html` <span class="pill" title="Created from inside another sprite">child</span>` : ''}${r.policy_restricted ? html` <span class="pill" title="Egress goes through a network policy">policy</span>` : ''}</td>
+        <td><span class="pill">${providerName(r.provider)}</span></td>
         <td>${stateBadge(r.state, r.busy)}</td>
         <td><div class="row"><div data-spark="${r.name}" style="width:90px;height:22px"></div><span class="faint mono" style="font-size:12px">${r.state === 'running' ? fmtCores(lastCPU(r.name)) : ''}</span></div></td>
         <td class="num">${r.vmm_rss_bytes ? fmtBytes(r.vmm_rss_bytes) : raw('<span class="faint">—</span>')}</td>
         <td class="num" title="${fmtBytes(r.disk_exclusive)} exclusive · ${fmtBytes(r.disk_apparent)} apparent">${fmtBytes(r.disk_used)}</td>
         <td class="num">${r.checkpoints ?? 0}</td>
         <td class="faint">${r.state === 'running' ? 'now' : ago(r.last_running_at)}</td>
-        <td><a href="${r.api.url}" target="_blank" rel="noopener" class="faint" style="font-size:12px">${r.api.url_settings?.auth === 'public' ? '🌐 public' : '🔒 private'} ↗</a></td>
-        <td class="actions">${actionButtons(r, { small: true })}</td></tr>`)).join('');
+        <td>${r.api ? html`<a href="${r.api.url}" target="_blank" rel="noopener" class="faint" style="font-size:12px">${r.api.url_settings?.auth === 'public' ? '🌐 public' : '🔒 private'} ↗</a>` : ''}</td>
+        <td class="actions">${isSprite(r) ? actionButtons(r, { small: true }) : ''}</td></tr>`)).join('');
       body.querySelectorAll('[data-spark]').forEach((d) => {
         const s = sparkline(recent(spriteSeries(d.dataset.spark, 'cpu_cores'), 120), { color: 'var(--s-running)', max: 0.05, height: 22, width: 90 });
         s.style.width = '90px'; s.style.height = '22px';
@@ -909,18 +943,26 @@ function OpsView(root) {
 
 const TABS = [['overview', 'Overview'], ['terminal', 'Terminal'], ['files', 'Files'], ['checkpoints', 'Checkpoints'], ['services', 'Services'], ['policy', 'Policies'], ['raw', 'JSON']];
 
+// Another API's sandbox gets what the operator status knows: the tabs that go
+// through the Sprites API (terminal, files, ...) and the actions do not apply.
+const OTHER_TABS = ['overview', 'raw'];
+
 function SpriteView(root, r) {
   const name = r.sprite;
-  if (!data.sprites.has(name)) {
-    root.innerHTML = String(html`<div class="empty"><h2>No sprite named ${name}</h2><p><a href="#/sprites">Back to sprites</a></p></div>`);
+  const first = spriteRows().find((x) => x.name === name);
+  if (!first) {
+    root.innerHTML = String(html`<div class="empty"><h2>No sandbox named ${name}</h2><p><a href="#/sprites">Back to sandboxes</a></p></div>`);
     return {};
   }
+  const sprite = isSprite(first);
+  const tabs = sprite ? TABS : TABS.filter(([k]) => OTHER_TABS.includes(k));
+  if (!tabs.some(([k]) => k === r.tab)) r.tab = 'overview';
   const base = `#/s/${encodeURIComponent(name)}`;
   root.innerHTML = String(html`
-    <div class="page-head"><div><div class="faint" style="font-size:12px"><a href="#/sprites">Sprites</a> /</div>
-      <div class="row"><h1 class="mono">${name}</h1><span id="sd-state"></span></div><div class="sub" id="sd-sub"></div></div>
+    <div class="page-head"><div><div class="faint" style="font-size:12px"><a href="#/sprites">Sandboxes</a> /</div>
+      <div class="row"><h1 class="mono">${displayName(first)}</h1><span class="pill">${providerName(first.provider)}</span><span id="sd-state"></span></div><div class="sub" id="sd-sub"></div></div>
       <div class="actions" id="sd-actions"></div></div>
-    <nav class="tabs">${TABS.map(([k, l]) => html`<a href="${base}/${k}" class="${k === r.tab ? 'on' : ''}">${l}</a>`)}</nav>
+    <nav class="tabs">${tabs.map(([k, l]) => html`<a href="${base}/${k}" class="${k === r.tab ? 'on' : ''}">${l}</a>`)}</nav>
     <div id="sd-body"></div>`);
   wireActions(root);
   const body = $('#sd-body');
@@ -928,8 +970,13 @@ function SpriteView(root, r) {
   return {
     update() {
       const s = spriteRows().find((x) => x.name === name);
-      if (!s) { toast(`${name} no longer exists`, true); location.hash = '#/sprites'; return; }
+      if (!s) { toast(`${labelOf(name)} no longer exists`, true); location.hash = '#/sprites'; return; }
       $('#sd-state').innerHTML = String(stateBadge(s.state, s.busy));
+      if (!sprite) {
+        $('#sd-sub').innerHTML = String(html`<span class="mono">${s.id}</span> · created ${ago(s.created_at)} · managed through the ${providerName(s.provider)} API`);
+        tab.update?.(s);
+        return;
+      }
       $('#sd-sub').innerHTML = String(html`<a href="${s.api.url}" target="_blank" rel="noopener">${s.api.url}</a> · ${s.api.url_settings?.auth === 'public' ? 'public' : 'private'} · created ${ago(s.api.created_at)}`);
       $('#sd-actions').innerHTML = [...actionButtons(s), html`<button class="danger" data-act="delete" data-name="${name}">Delete</button>`].join('');
       tab.update?.(s);
@@ -949,7 +996,7 @@ function SpriteOverview(root, name) {
       <section class="card"><header><h2>Details</h2></header><dl class="kv" id="so-kv"></dl></section>
       <section class="card"><header><h2>Environment &amp; labels</h2></header><div id="so-env"></div></section>
     </div>
-    <section class="card" style="margin-top:16px"><header><h2>Custom domains</h2><span class="note">certificates for names that point at this sprite</span></header><div id="so-dom"></div></section>`;
+    <section class="card" style="margin-top:16px" id="so-dom-card"><header><h2>Custom domains</h2><span class="note">certificates for names that point at this sprite</span></header><div id="so-dom"></div></section>`;
   let domainsAt = 0;
   const loadDomains = async () => {
     try {
@@ -964,10 +1011,11 @@ function SpriteOverview(root, name) {
   };
   return {
     update(s) {
-      if (Date.now() - domainsAt > 10000) { domainsAt = Date.now(); loadDomains(); }
+      $('#so-dom-card').hidden = !s.api;
+      if (s.api && Date.now() - domainsAt > 10000) { domainsAt = Date.now(); loadDomains(); }
       const pts = data.metrics.points, times = data.times, interval = data.metrics.interval_seconds * 1000;
       const cpu = spriteSeries(name, 'cpu_cores'), mem = spriteSeries(name, 'rss_bytes');
-      const cfg = s.api.config || {};
+      const cfg = s.api?.config || {};
       $('#so-kpis').innerHTML = [
         stat({ label: 'CPU now', value: s.state === 'running' ? fmtCores(lastCPU(name)) : '—', unit: s.state === 'running' ? 'cores' : '', foot: `${cfg.cpus || 'default'} vCPUs`, sparkId: 'so-sp-cpu' }),
         stat({ label: 'Memory', value: s.vmm_rss_bytes ? fmtBytes(s.vmm_rss_bytes) : '—', foot: `${cfg.ram_mb ? cfg.ram_mb + ' MiB' : 'default'} guest RAM${s.snapshot_bytes ? ` · ${fmtBytes(s.snapshot_bytes)} snapshot` : ''}`, sparkId: 'so-sp-mem' }),
@@ -978,20 +1026,23 @@ function SpriteOverview(root, name) {
       putSpark('so-sp-mem', recent(mem, 120), 'var(--s-running)');
       timeSeries($('#so-cpu'), { times, interval, height: 170, floor: 0.1, format: fmtCores, series: [{ label: 'CPU cores', color: 'var(--s-running)', values: cpu }] });
       timeSeries($('#so-mem'), { times, interval, height: 170, bytes: true, format: (v) => fmtBytes(v, 0), series: [{ label: 'Memory', color: 'var(--s-running)', values: mem }] });
-      lanes($('#so-lane'), { names: [name], times, interval, colors: STATE_COLORS, state: (n, i) => pts[i].sprites?.[n]?.state });
+      lanes($('#so-lane'), { names: [name], times, interval, colors: STATE_COLORS, label: labelOf, state: (n, i) => pts[i].sprites?.[n]?.state });
       $('#so-kv').innerHTML = String(html`
-        <dt>ID</dt><dd class="mono">${s.api.id}</dd>
-        <dt>Created</dt><dd>${new Date(s.api.created_at).toLocaleString()}</dd>
-        <dt>Last running</dt><dd>${s.state === 'running' ? 'now' : ago(s.api.last_running_at)}</dd>
+        <dt>ID</dt><dd class="mono">${s.id}</dd>
+        <dt>Provider</dt><dd>${providerName(s.provider)}</dd>
+        <dt>Created</dt><dd>${new Date(s.created_at).toLocaleString()}</dd>
+        <dt>Last running</dt><dd>${s.state === 'running' ? 'now' : ago(s.last_running_at)}</dd>
         <dt>IP</dt><dd class="mono">${s.ip || '—'}${s.tap ? html` <span class="faint">on ${s.tap}</span>` : ''}</dd>
         <dt>Network policy</dt><dd>${s.policy_restricted ? 'restricted egress' : 'open egress'}</dd>
-        <dt>Lease</dt><dd>${s.api.expires_at
-          ? html`expires ${new Date(s.api.expires_at).toLocaleString()}${s.api.protected ? html` <span class="pill">protected</span>` : ''}`
-          : 'none — this sprite is kept until it is deleted'}</dd>
+        <dt>Lease</dt><dd>${s.expires_at
+          ? html`expires ${new Date(s.expires_at).toLocaleString()}${s.protected ? html` <span class="pill">protected</span>` : ''}`
+          : 'none — kept until it is deleted'}</dd>
         <dt>Task holds</dt><dd>${s.task_holds ?? '—'}</dd>
         <dt>API calls in flight</dt><dd>${s.api_inflight ?? 0}</dd>
-        ${s.api.parent_id ? html`<dt>Parent</dt><dd class="mono">${s.api.parent_id}</dd>` : ''}
+        ${s.api?.parent_id ? html`<dt>Parent</dt><dd class="mono">${s.api.parent_id}</dd>` : ''}
+        ${s.image ? html`<dt>Image</dt><dd class="mono">${s.image}</dd>` : ''}
         ${s.vmm_pid ? html`<dt>VMM PID</dt><dd class="mono">${s.vmm_pid}</dd>` : ''}`);
+      if (!s.api) { $('#so-env').innerHTML = String(html`<p class="faint" style="margin:0">Environment and labels are kept by the ${providerName(s.provider)} API; ask it, or see the JSON tab.</p>`); return; }
       const env = Object.entries(s.api.environment || {});
       $('#so-env').innerHTML = String(html`${env.length ? html`<dl class="kv">${env.map(([k, v]) => html`<dt class="mono">${k}</dt><dd class="mono">${v}</dd>`)}</dl>` : html`<p class="faint" style="margin:0">No environment variables.</p>`}
         ${(s.api.labels || []).length ? html`<div class="row wrap" style="margin-top:12px">${s.api.labels.map((l) => html`<span class="pill">${l}</span>`)}</div>` : ''}`);
@@ -1242,6 +1293,7 @@ function RawTab(root, name) {
   root.innerHTML = '<div class="grid two"><section class="card"><header><h2>API record</h2><span class="note">GET /v1/sprites/{name}</span></header><pre class="json" id="raw-api"></pre></section><section class="card"><header><h2>Operator status</h2><span class="note">sandpitd status</span></header><pre class="json" id="raw-st"></pre></section></div>';
   return {
     update(s) {
+      $('#raw-api').closest('.card').hidden = !s.api;
       $('#raw-api').textContent = JSON.stringify(s.api, null, 2);
       $('#raw-st').textContent = JSON.stringify((data.status.sprites || []).find((x) => x.name === name), null, 2);
     },

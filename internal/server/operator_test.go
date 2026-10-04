@@ -99,6 +99,37 @@ func TestDiskGuardRefusalInUpstreamsShape(t *testing.T) {
 	}
 }
 
+// Status, and so the web UI, covers every API's sandboxes: another API's,
+// which has no sprite name, goes by "<provider>:<id>" with its own name as the label.
+func TestStatusListsEveryAPI(t *testing.T) {
+	s, h := newOperatorServer(t, Options{})
+	apiCall(t, h, "POST", "/v1/sprites", `{"name":"one"}`)
+	other := &store.Sprite{Record: store.Record{ID: "sb-1", API: "daytona", CreatedAt: time.Now(),
+		Ext: map[string]json.RawMessage{"daytona": json.RawMessage(`{"name":"box"}`)}}}
+	if err := s.store.Create(other); err != nil {
+		t.Fatal(err)
+	}
+	off, err := OfflineStatus(s.opts.DataDir, filepath.Join(s.opts.DataDir, "no-netd.sock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, st := range []Status{s.status(context.Background(), time.Now(), "127.0.0.1:0"), off} {
+		if len(st.Sprites) != 2 || st.Host.Cold != 2 {
+			t.Fatalf("sprites = %+v", st.Sprites)
+		}
+		if got := st.Sprites[0]; got.Name != "one" || got.Provider != "" {
+			t.Errorf("sprite = %+v", got)
+		}
+		if got := st.Sprites[1]; got.Name != "daytona:sb-1" || got.Provider != "daytona" || got.Label != "box" || got.State != "cold" {
+			t.Errorf("daytona sandbox = %+v", got)
+		}
+	}
+	s.metrics.sample(time.Now())
+	if p := s.metrics.snapshot(time.Time{}).Points; len(p) != 1 || p[0].Sprites["daytona:sb-1"].State != "cold" || p[0].Cold != 2 {
+		t.Fatalf("metrics = %+v", p)
+	}
+}
+
 func TestStatusLiveAndOffline(t *testing.T) {
 	s, h := newOperatorServer(t, Options{Options: engine.Options{MaxRunning: 3}})
 	apiCall(t, h, "POST", "/v1/sprites", `{"name":"one"}`)

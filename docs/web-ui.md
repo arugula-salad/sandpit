@@ -29,7 +29,9 @@ only, never the dashboard, and neither does an `--api-host` name ([API keys](api
   and networking; charts of states, CPU and memory over the last hour; a lane per sprite showing
   when it was running, warm or cold; memory and disk by sprite (disk split into what only that
   sprite holds and what it shares with clones); and a feed of state changes.
-- **Sprites**: a filterable table with a 10-minute CPU sparkline per sprite, wake and suspend.
+- **Sandboxes**: every sandbox on the host, whichever API made it (Sprites, E2B, Vercel, Daytona,
+  Modal), in a table filterable by name or ID, provider and state, with a 10-minute CPU
+  sparkline per sandbox; wake and suspend for sprites.
 - **Sprite**: the same figures for one sprite, and tabs for a **terminal** (a login shell over
   the exec WebSocket), **files** (browse, view, download), **checkpoints** (create, restore,
   delete, clone into a new sprite), **services** (start, stop, restart), **policies** (network,
@@ -48,6 +50,13 @@ only, never the dashboard, and neither does an `--api-host` name ([API keys](api
   inside sprites, the web UI itself) and by sprite, from 15 minutes to 24 hours.
 - **Host**: host memory, load and volume over time, the daemon, and stray Firecracker or
   sandpitd processes (as `sandpitd status` reports them).
+
+A sandbox of another API opens to its overview (CPU, memory, disk, state, details) and the
+operator record. It has no sprite name, so status and the metrics history call it
+`<provider>:<id>` (with `label`, its name in that API where it has one, such as Daytona's or
+Vercel's); the terminal, files, checkpoints, services, policies and the wake, suspend and delete
+buttons go through the Sprites API and are for sprites only: manage those sandboxes through
+their own API.
 
 Overview, Traffic, Ops and Host keep their headline figures on top and split the charts into
 tabs, so a tab fits on a screen; each page remembers the last tab in the browser.

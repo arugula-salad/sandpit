@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
@@ -95,9 +96,16 @@ func imageCacheStatus(vmRoot string) ImageCacheStatus {
 }
 
 type SpriteStatus struct {
-	Name  string `json:"name"`
-	ID    string `json:"id"`
-	State string `json:"state"` // running, warm or cold
+	// Name is a sprite's name. A sandbox of another API has no name of its own
+	// here: it is "<provider>:<id>", unique across the host and never a valid
+	// sprite name, and Label is what that API calls it, if anything.
+	Name string `json:"name"`
+	ID   string `json:"id"`
+	// Provider is the API the sandbox belongs to (store.Record.API); empty is Sprites.
+	Provider  string    `json:"provider,omitempty"`
+	Label     string    `json:"label,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+	State     string    `json:"state"` // running, warm or cold
 	// Busy marks a sprite in the middle of a transition (booting, suspending,
 	// checkpointing); what could not be read without waiting for it is left out.
 	Busy   bool  `json:"busy,omitempty"`
@@ -265,8 +273,29 @@ func diskUsage(st *store.Store, vmRoot string, sprites []SpriteStatus) {
 	}
 }
 
+// statusName is what status and the metrics history call a record: its name for
+// a sprite, "<provider>:<id>" for a sandbox of another API (SpriteStatus.Name).
+func statusName(sp store.Sprite) string {
+	if sp.API == store.Sprites {
+		return sp.Name
+	}
+	return sp.API + ":" + sp.ID
+}
+
+// providerLabel is the name another API gave its sandbox, for the front ends
+// that keep one under "name" in their metadata (Daytona, Vercel).
+func providerLabel(sp store.Sprite) string {
+	var m struct {
+		Name string `json:"name"`
+	}
+	if raw, ok := sp.Ext[sp.API]; ok && sp.API != store.Sprites {
+		_ = json.Unmarshal(raw, &m)
+	}
+	return m.Name
+}
+
 func spriteBase(sp store.Sprite) SpriteStatus {
-	return SpriteStatus{Name: sp.Name, ID: sp.ID, Checkpoints: len(sp.Checkpoints), MountedCheckpoints: sp.Mounts,
+	return SpriteStatus{Name: statusName(sp), ID: sp.ID, Provider: sp.API, Label: providerLabel(sp), CreatedAt: sp.CreatedAt, Checkpoints: len(sp.Checkpoints), MountedCheckpoints: sp.Mounts,
 		NetIndex: sp.NetIndex, LastRunningAt: sp.LastRunningAt, LastWarmingAt: sp.LastWarmingAt, Image: sp.Image,
 		ExpiresAt: sp.ExpiresAt, Protected: sp.Protected}
 }
@@ -306,7 +335,7 @@ func OfflineStatus(dataDir, netdSocket string) (Status, error) {
 	} else {
 		out.Host.PolicyHelper.Detail = "no socket at " + netdSocket
 	}
-	for _, sp := range st.List(store.Sprites, "") {
+	for _, sp := range st.All() {
 		s := spriteBase(sp)
 		s.State = "cold"
 		if vmm.HasSnapshot(st.Dir(sp.ID)) {
@@ -338,7 +367,7 @@ func (s *Server) status(ctx context.Context, started time.Time, listen string) S
 	out.Host.Cgroup = s.opts.Host.Confine.Subtree()
 
 	var wg sync.WaitGroup
-	sprites := s.store.List(store.Sprites, "")
+	sprites := s.store.All()
 	out.Sprites = make([]SpriteStatus, len(sprites))
 	for i, sp := range sprites {
 		st := spriteBase(sp)
