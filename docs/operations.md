@@ -82,6 +82,21 @@ data directory, flags and sprites. The host names, the root token's `wisproot_` 
 API keys' `wisp_` prefix are kept for exactly this, so its tokens and keys keep working; a
 later migration renames them.
 
+wispd itself can be taken over the same way, keeping `wisp.service` and its data, sprites, URLs and
+tokens. The Makefile refuses wisp's data directory, so this goes through the scripts directly:
+
+```sh
+make build netd
+SANDPIT_DATA=~/.local/share/wisp ./scripts/build-initrd.sh   # sandpit-agent in place of wisp-agent
+./scripts/install-service.sh --name wisp --data ~/.local/share/wisp --takeover
+```
+
+`WISPD_FLAGS` carry over, with `--listen 127.0.0.1:7788` made explicit (wispd's default listener;
+sandpitd's is 7900), so the tailnet socket and anything that reaches wispd on 7788 keep working.
+The takeover refuses unless `wisp.service` runs wisp's own `~/.local/lib/wisp/wisp/wispd` on that
+data directory. wispd and `~/.config/wisp/wisp.env` stay for a rollback. Afterwards
+`wisp.service` is sandpit's: re-run the same command without `--takeover` to upgrade it.
+
 To publish the Sprites API behind a reverse proxy beside the other APIs, see
 [`--sprites-public-url`](public-urls.md#behind-a-tls-terminating-proxy).
 

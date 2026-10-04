@@ -19,15 +19,21 @@
 #                 directory, or the name sandpit on another one (refused by
 #                 default: either is usually a typo that would repoint or fight
 #                 the default install)
-#   --takeover    replace an existing <name>.service that runs wisp's sandboxd
-#                 (installed by wisp's make install-sandboxd) on this same --data:
-#                 same unit name, same data, sandpitd in place of sandboxd. Its
-#                 SANDBOXD_FLAGS carry over unless flags are given after --.
-#                 wisp's old lib dir and env file are left for a rollback.
+#   --takeover    replace an existing <name>.service that runs one of wisp's
+#                 daemons on this same --data, keeping the unit name and data:
+#                 - wisp's sandboxd (installed by wisp's make install-sandboxd):
+#                   its SANDBOXD_FLAGS carry over;
+#                 - wispd itself: --name wisp --data ~/.local/share/wisp, and only
+#                   when wisp.service runs wisp's own wispd there. WISPD_FLAGS carry
+#                   over, with --listen 127.0.0.1:7788 (wispd's default, not
+#                   sandpitd's) added when they have no --listen.
+#                 Flags given after -- replace what would carry over. wisp's old
+#                 lib dir and env file are left for a rollback.
 #
-# Never touched, whatever the flags: the unit name wisp (wisp.service is wispd)
-# and wisp's data directory (~/.local/share/wisp). An existing <name>.service
-# whose binary or data directory differs from what is being installed is never
+# Never touched without --takeover of wispd: the unit name wisp (wisp.service is
+# wispd) and wisp's data directory (~/.local/share/wisp). Once taken over they are
+# sandpit's, and a plain re-install upgrades them. An existing <name>.service whose
+# binary or data directory differs from what is being installed is never
 # repointed (bar --takeover above): uninstall it first.
 #
 # Two things need root, once, and this script only tells you about them:
@@ -66,7 +72,7 @@ while [ $# -gt 0 ]; do
     --system-dropin) ACTION=dropin; shift ;;
     --remove-system-dropin) ACTION=rmdropin; shift ;;
     --) shift; FLAGS=("$@"); HAVE_FLAGS=1; break ;;
-    *) sed -n '2,44p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2 ;;
+    *) sed -n '2,50p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2 ;;
   esac
 done
 
@@ -118,8 +124,6 @@ refuse() { echo "install-service.sh: refusing: $*" >&2; exit 1; }
 # LIB below a parent of every stack's directory, and uninstall rm -rf's LIB.
 case "$NAME" in
   ''|*/*|.*) refuse "bad --name '$NAME'" ;;
-  # wisp.service is wispd's, on a host shared with wisp; sandpit leaves it alone.
-  wisp) refuse "--name wisp is wisp's own service (wispd); sandpit never installs, repoints or removes it" ;;
 esac
 CONF_DIR="${XDG_CONFIG_HOME:-$HOME/.config}"
 UNIT_DIR="$CONF_DIR/systemd/user"
@@ -136,6 +140,11 @@ if [ -e "$UNIT" ]; then
   EXEC=$(sed -n 's/^ExecStart=//p' "$UNIT" | head -n1)
   read -r OLD_BIN _ <<<"$EXEC" || true
   OLD_DATA=$(grep -oE -- '--data [^ ]+' <<<"$EXEC" | head -n1 | cut -d' ' -f2 || true)
+fi
+# wisp.service is wispd's, on a host shared with wisp: sandpit leaves it alone
+# unless it is taking wispd over (--takeover), or already has (sandpitd runs it).
+if [ "$NAME" = wisp ] && [ "$TAKEOVER" = 0 ] && [ "$OLD_BIN" != "$LIB/$BIN" ]; then
+  refuse "--name wisp is wisp's own service (wispd); sandpit installs it only with --takeover, replacing wispd in place"
 fi
 
 if [ "$ACTION" = uninstall ]; then
@@ -162,7 +171,12 @@ is_dir_of() { # app
   done
   return 1
 }
-is_dir_of wisp && refuse "$DATA is wisp's data directory (wispd's sprites); sandpit never runs on it"
+# wisp's data directory belongs to wisp.service alone, as wispd or, taken over,
+# as sandpitd; the name check above already keeps wisp.service to a takeover.
+if is_dir_of wisp && [ "$NAME" != wisp ]; then
+  refuse "$DATA is wisp's data directory (wispd's sprites); only wisp.service runs on it (--name wisp --takeover)"
+fi
+[ "$NAME" != wisp ] || is_dir_of wisp || refuse "--name wisp runs on wisp's data directory, not $DATA"
 if [ "$FORCE_PAIR" = 0 ]; then
   IS_DEFAULT_DATA=0; is_dir_of sandpit && IS_DEFAULT_DATA=1
   [ "$NAME" = "$DEFAULT_NAME" ] || [ "$IS_DEFAULT_DATA" = 0 ] \
@@ -176,8 +190,13 @@ fi
 IS_TAKEOVER=0
 if [ -e "$UNIT" ] && { [ "$OLD_BIN" != "$LIB/$BIN" ] || [ "$OLD_DATA" != "$DATA" ]; }; then
   if [ "$TAKEOVER" = 1 ]; then
-    [ "$OLD_BIN" = "$WISP_LIB/sandboxd" ] \
-      || refuse "--takeover replaces wisp's sandboxd ($WISP_LIB/sandboxd), but $UNIT runs '${OLD_BIN:-?}'"
+    if [ "$NAME" = wisp ]; then
+      [ "$OLD_BIN" = "$WISP_LIB/wispd" ] \
+        || refuse "--takeover of wisp.service replaces wisp's wispd ($WISP_LIB/wispd), but it runs '${OLD_BIN:-?}'"
+    else
+      [ "$OLD_BIN" = "$WISP_LIB/sandboxd" ] \
+        || refuse "--takeover replaces wisp's sandboxd ($WISP_LIB/sandboxd), but $UNIT runs '${OLD_BIN:-?}'"
+    fi
     [ "$OLD_DATA" = "$DATA" ] \
       || refuse "--takeover keeps the data directory, but $UNIT runs on '${OLD_DATA:-?}', not $DATA"
     IS_TAKEOVER=1
@@ -200,19 +219,26 @@ elif [ -e "$ENV_FILE" ]; then
     || refuse "$ENV_FILE has no $FLAGS_VAR= line; pass flags after -- to rewrite it"
   NEW_FLAGS="$(sed -n "s/^$FLAGS_VAR=//p" "$ENV_FILE")"
 elif [ "$IS_TAKEOVER" = 1 ] && [ -e "$WISP_ENV_FILE" ]; then
-  grep -q '^SANDBOXD_FLAGS=' "$WISP_ENV_FILE" \
-    || refuse "$WISP_ENV_FILE has no SANDBOXD_FLAGS= line to carry over; pass flags after --"
-  NEW_FLAGS="$(sed -n 's/^SANDBOXD_FLAGS=//p' "$WISP_ENV_FILE")"; WRITE_ENV=1
+  OLD_VAR=SANDBOXD_FLAGS; [ "$NAME" = wisp ] && OLD_VAR=WISPD_FLAGS
+  grep -q "^$OLD_VAR=" "$WISP_ENV_FILE" \
+    || refuse "$WISP_ENV_FILE has no $OLD_VAR= line to carry over; pass flags after --"
+  NEW_FLAGS="$(sed -n "s/^$OLD_VAR=//p" "$WISP_ENV_FILE")"; WRITE_ENV=1
+  # wispd's --listen default was 127.0.0.1:7788, sandpitd's is 7900: keep wispd's.
+  if [ "$NAME" = wisp ] && ! grep -qE -- '(^|[[:space:]])--?listen[= ]' <<<"$NEW_FLAGS"; then
+    NEW_FLAGS="--listen 127.0.0.1:7788${NEW_FLAGS:+ $NEW_FLAGS}"
+  fi
 else
   NEW_FLAGS=""; WRITE_ENV=1
 fi
 # sandpitd's default (127.0.0.1:7900) is clear of wispd, but 7788/7789 are
 # wispd's: a sandpitd there would fail to start, or win the port from wispd.
 # Go's flag package takes -listen as well as --listen, and = or a space.
-if grep -qE -- '(^|[[:space:]])--?[a-z0-9-]*listen[= ]+[^[:space:]]*:(7788|7789)([[:space:]]|$)' <<<"$NEW_FLAGS"; then
+# Taken over, wisp.service is wispd's successor and keeps them.
+if [ "$NAME" != wisp ] && grep -qE -- '(^|[[:space:]])--?[a-z0-9-]*listen[= ]+[^[:space:]]*:(7788|7789)([[:space:]]|$)' <<<"$NEW_FLAGS"; then
   refuse "a listen address on port 7788 or 7789 is wispd's ($NEW_FLAGS); pick another (sandpit's block is 7900-7904)"
 fi
-[ "$ACTION" != check ] || { echo "ok: $NAME.service may be installed ($BIN on $DATA$([ "$IS_TAKEOVER" = 1 ] && echo ", taking over wisp's sandboxd"))"; exit 0; }
+WHAT=sandboxd; [ "$NAME" = wisp ] && WHAT=wispd
+[ "$ACTION" != check ] || { echo "ok: $NAME.service may be installed ($BIN on $DATA$([ "$IS_TAKEOVER" = 1 ] && echo ", taking over wisp's $WHAT"))"; exit 0; }
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 [ -x "$REPO/bin/$BIN" ] || { echo "no $REPO/bin/$BIN: run make build (or make install-service)" >&2; exit 1; }
@@ -281,7 +307,7 @@ chmod 0755 "$LIB/wait-host.sh"
 # On a host shared with wisp, start after wispd, so after a reboot wisp's
 # sprites come back before this daemon's cold boots compete with them.
 ORDER=""
-if [ -e "$UNIT_DIR/wisp.service" ]; then
+if [ "$NAME" != wisp ] && [ -e "$UNIT_DIR/wisp.service" ]; then
   ORDER="After=wisp.service
 "
 fi
@@ -335,7 +361,7 @@ echo "    flags:   $ENV_FILE, then systemctl --user restart $NAME"
 echo "    stop:    systemctl --user stop $NAME          (suspends every running sprite first; they resume warm)"
 if [ "$IS_TAKEOVER" = 1 ]; then
   echo
-  echo "took over from wisp's sandboxd; kept for a rollback: $WISP_LIB and $WISP_ENV_FILE"
+  echo "took over from wisp's $WHAT; kept for a rollback: $WISP_LIB and $WISP_ENV_FILE"
 fi
 if [ "$(loginctl show-user "$USER" -p Linger --value 2>/dev/null)" != yes ]; then
   echo

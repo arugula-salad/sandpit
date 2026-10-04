@@ -179,7 +179,7 @@ OTHER=$H/other; mkdata "$OTHER"
 # wisp's own: its unit name and its data directory, whatever else is said.
 refuses "the name wisp" "wisp's own service" -- --name wisp --data "$OTHER"
 refuses "the name wisp with --force-pair" "wisp's own service" -- --name wisp --force-pair
-refuses "the name wisp with --takeover" "wisp's own service" -- --name wisp --data "$WISPDATA" --takeover
+refuses "--name wisp --takeover onto another data dir" "runs on wisp's data directory" -- --name wisp --data "$OTHER" --takeover
 refuses "uninstalling wisp.service" "wisp's own service" -- --uninstall --name wisp
 refuses "wisp's data dir" "wisp's data directory" -- --name sb --data "$WISPDATA"
 refuses "wisp's data dir, other spelling" "wisp's data directory" -- --name sb --data "$WISPDATA/../wisp/"
@@ -223,6 +223,34 @@ run "$T/repo" -- --name sb --data "$OTHER" -- --listen 127.0.0.1:1 > /dev/null \
   && grep -q '^SANDPIT_FLAGS=--listen 127.0.0.1:1$' "$H/.config/sandpit/sb.env" && pass "flags after -- rewrite a stale env file" || fail "flags after -- did not rewrite the stale env file"
 run "$T/repo" -- --uninstall --name sb > /dev/null && [ ! -e "$H/.config/systemd/user/sb.service" ] && [ ! -e "$H/.local/lib/sandpit/sb" ] && [ -e "$H/.config/sandpit/sb.env" ] \
   && pass "--uninstall removes the unit and lib dir, keeps the env file" || fail "--uninstall"
+
+# ---- --takeover of wispd itself: wisp.service on wisp's data dir becomes sandpitd ----
+fresh
+printf 'WISPD_FLAGS=--url-domain widgets.test --public-listen :8443 --api-listen 127.0.0.1:7789\n' > "$H/.config/wisp/wisp.env"
+run "$T/repo" -- --check --name wisp --data "$WISPDATA" --takeover > "$T/out" && grep -q "taking over wisp's wispd" "$T/out" \
+  && pass "--check passes a takeover of wispd" || { fail "--check --takeover of wispd:"; cat "$T/out"; }
+if run "$T/repo" -- --name wisp --data "$WISPDATA" --takeover > "$T/out"; then
+  U=$H/.config/systemd/user/wisp.service
+  grep -qxF "ExecStart=$H/.local/lib/sandpit/wisp/sandpitd --data $WISPDATA \$SANDPIT_FLAGS" "$U" \
+    && pass "wispd takeover: wisp.service now runs sandpitd on wisp's data" || { fail "wispd takeover unit:"; cat "$U"; }
+  grep -qxF "SANDPIT_FLAGS=--listen 127.0.0.1:7788 --url-domain widgets.test --public-listen :8443 --api-listen 127.0.0.1:7789" "$H/.config/sandpit/wisp.env" \
+    && pass "wispd takeover carries WISPD_FLAGS over, with wispd's --listen 7788 made explicit" || fail "wispd takeover env: $(cat "$H/.config/sandpit/wisp.env")"
+  ! grep -q '^After=wisp.service' "$U" && pass "wispd takeover: wisp.service is not ordered after itself" || fail "wisp.service orders after itself"
+  [ -e "$H/.local/lib/wisp/wisp/wispd" ] && [ -e "$H/.config/wisp/wisp.env" ] \
+    && pass "wispd takeover keeps wispd and its env file for a rollback" || fail "wispd takeover removed wisp's files"
+  grep -q "took over from wisp's wispd" "$T/out" && pass "wispd takeover says what it took over" || { fail "takeover output:"; cat "$T/out"; }
+  run "$T/repo" -- --name wisp --data "$WISPDATA" > /dev/null && pass "after taking wispd over, a plain reinstall of wisp is fine" || fail "reinstall of wisp after takeover refused"
+  run "$T/repo" -- --name wisp --data "$WISPDATA" -- --listen 127.0.0.1:7788 --api-listen 127.0.0.1:7789 --e2b-listen 127.0.0.1:7791 > /dev/null \
+    && pass "taken over, wisp keeps wispd's ports 7788/7789" || fail "wisp refused its own ports"
+  run "$T/repo" -- --uninstall --name wisp > /dev/null && pass "taken over, wisp.service is sandpit's to uninstall" || fail "uninstall of taken-over wisp refused"
+else
+  fail "wispd takeover refused:"; cat "$T/out"
+fi
+fresh
+sed -i 's|^ExecStart=[^ ]*wispd |ExecStart=/opt/elsewhere/wispd |' "$H/.config/systemd/user/wisp.service"
+refuses "--takeover of a wisp.service not running wisp's wispd" "replaces wisp's wispd" -- --name wisp --data "$WISPDATA" --takeover
+fresh
+refuses "another name on wisp's data dir, even with --takeover" "only wisp.service runs on it" -- --name sb --data "$WISPDATA" --takeover
 
 # ---- --takeover: geek's sandboxd.service (wisp's sandboxd on /bulk/sandboxd) ----
 # What wisp's make install-sandboxd NAME=sandboxd DATA=... left behind.
