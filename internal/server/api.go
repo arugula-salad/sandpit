@@ -434,7 +434,7 @@ func (s *Server) create(w http.ResponseWriter, r *http.Request, parent *store.Sp
 		}
 		// Checked again by the store; this only saves a pull that would be for nothing.
 		if _, err := s.store.GetByName(store.Sprites, req.Name); err == nil {
-			writeErr(w, http.StatusBadRequest, "name_taken", "a sprite with that name already exists")
+			writeErr(w, http.StatusConflict, "name_taken", "a sprite with that name already exists")
 			return
 		}
 		disk, img, ref, release, err := s.imageSource(r.Context(), req.From.Image, parent != nil)
@@ -475,7 +475,7 @@ func (s *Server) create(w http.ResponseWriter, r *http.Request, parent *store.Sp
 		writeNoRoom(w, err)
 		return
 	case errors.Is(err, store.ErrExists):
-		writeErr(w, http.StatusBadRequest, "name_taken", "a sprite with that name already exists")
+		writeErr(w, http.StatusConflict, "name_taken", "a sprite with that name already exists")
 		return
 	case err != nil:
 		writeErr(w, http.StatusInternalServerError, "internal", err.Error())
