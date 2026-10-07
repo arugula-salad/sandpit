@@ -70,8 +70,7 @@ func TestInGuestAPI(t *testing.T) {
 		if want := "stopped\nstarted\nError: service not found (404)\nrc=1\n"; out != want {
 			t.Fatalf("lifecycle from inside: %q, want %q", out, want)
 		}
-		// A second http_port service takes the port: web's definition loses it.
-		if out := sh(t, `sprite-env services create web2 --cmd sleep --args 600 --http-port 9 --no-stream && sprite-env services get web | jq -c .http_port; sprite-env services delete web2`); out != "null\n" {
+		if out := sh(t, `sprite-env services create web2 --cmd sleep --args 1 --http-port 9 2>&1; echo "rc=$?"`); !strings.Contains(out, "(409)") || !strings.HasSuffix(out, "rc=1\n") {
 			t.Fatalf("second http_port service: %q", out)
 		}
 	})

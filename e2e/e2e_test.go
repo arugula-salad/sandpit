@@ -273,6 +273,10 @@ func TestSDKConformance(t *testing.T) {
 		if err != nil || svc.State == nil || svc.State.Status != "running" {
 			t.Fatalf("get service: %+v %v", svc, err)
 		}
+		if _, err := sp.CreateService(ctx, "web2", &sprites.ServiceRequest{Cmd: "sleep", Args: []string{"1"}, HTTPPort: &port}); err == nil {
+			t.Fatal("second http_port service should be a conflict")
+		}
+
 		// The sprite URL now routes to the service's port instead of 8080.
 		if got := fetchURL(t, name); got != "served-by-a-service\n" {
 			t.Fatalf("sprite URL served %q", got)

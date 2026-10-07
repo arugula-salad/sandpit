@@ -170,25 +170,18 @@ func TestServicesStartInDependencyOrderOnBoot(t *testing.T) {
 	}
 }
 
-// chant's apply moves the port between services one at a time, in either
-// order, so a new holder takes it rather than being refused; the listing then
-// says the old holder has none (null, not absent, so a caller sees it go).
-func TestServiceHTTPPortMovesToTheNewHolder(t *testing.T) {
+// One service holds the HTTP port: a second is refused while the first has it.
+// The listing gives http_port as null, not absent, for a service without one,
+// so a caller comparing it with what it wants sees the port go as well as come.
+func TestServiceHTTPPortConflictAndNullListing(t *testing.T) {
 	ts, sv, _ := newServiceServer(t)
 	put(t, ts, "a", `{"cmd":"sleep","args":["30"],"http_port":3000}`, "duration=10ms")
-	if code, _ := put(t, ts, "b", `{"cmd":"sleep","args":["30"],"http_port":4000}`, "duration=10ms"); code != http.StatusOK {
-		t.Fatalf("second http_port service: status %d, want 200", code)
+	if code, _ := put(t, ts, "b", `{"cmd":"sleep","args":["30"],"http_port":4000}`, ""); code != http.StatusConflict {
+		t.Fatalf("second http_port service: status %d, want 409", code)
 	}
-	a, _ := sv.Get("a")
-	b, _ := sv.Get("b")
-	if a.HTTPPort != nil || b.HTTPPort == nil || *b.HTTPPort != 4000 {
-		t.Fatalf("a.http_port=%v b.http_port=%v", a.HTTPPort, b.HTTPPort)
-	}
-	if a.State.Status != "running" {
-		t.Errorf("a lost its port and its process: %+v", a.State)
-	}
-	if def, _ := os.ReadFile(filepath.Join(sv.defsDir, "a.json")); !bytes.Contains(def, []byte(`"http_port": null`)) {
-		t.Errorf("a's saved definition still has the port: %s", def)
+	put(t, ts, "c", `{"cmd":"sleep","args":["30"]}`, "duration=10ms")
+	if def, _ := os.ReadFile(filepath.Join(sv.defsDir, "c.json")); !bytes.Contains(def, []byte(`"http_port": null`)) {
+		t.Errorf("c's saved definition: %s", def)
 	}
 	resp, err := http.Get(ts.URL + "/services")
 	if err != nil {

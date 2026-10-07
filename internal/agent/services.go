@@ -420,6 +420,13 @@ func (sv *Supervisor) Define(def ServiceDef) error {
 			return fmt.Errorf("needs unknown service %q", need)
 		}
 	}
+	if def.HTTPPort != nil {
+		for n, o := range sv.services {
+			if n != def.Name && o.def.HTTPPort != nil {
+				return fmt.Errorf("%w: another service already has an HTTP port configured", ErrServiceConflict)
+			}
+		}
+	}
 	old, existed := sv.services[def.Name]
 	if existed {
 		prev := old.def
@@ -433,20 +440,6 @@ func (sv *Supervisor) Define(def ServiceDef) error {
 	b, _ := json.MarshalIndent(def, "", "  ")
 	if err := os.WriteFile(sv.defPath(def.Name), b, 0o644); err != nil {
 		return err
-	}
-	// One service holds the HTTP port. A new holder takes it from the old one,
-	// whose definition loses http_port (and keeps running), so moving the port
-	// from one service to another works in either order.
-	if def.HTTPPort != nil {
-		for n, o := range sv.services {
-			if n == def.Name || o.def.HTTPPort == nil {
-				continue
-			}
-			o.def.HTTPPort = nil
-			if b, err := json.MarshalIndent(o.def, "", "  "); err == nil {
-				os.WriteFile(sv.defPath(n), b, 0o644)
-			}
-		}
 	}
 	if existed {
 		sv.stopLocked(old, defaultStopTimeout)

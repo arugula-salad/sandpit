@@ -22,9 +22,8 @@
   sprite's disk in `/.sprite/services/`, logs in `/.sprite/logs/services/<name>.log`, so both
   travel with checkpoints. Every service starts on a cold boot.
   A service gets the sprite's `environment` (from create), under its own `env`, as an exec
-  session does; the agent asks sandpitd for it when it starts. One service holds `http_port`:
-  defining it on another moves it there, and the old holder's definition lists `http_port:
-  null`. A service another one `needs` can be deleted (and created again); its dependants keep
+  session does; the agent asks sandpitd for it when it starts. A service without `http_port`
+  lists it as `null`. A service another one `needs` can be deleted (and created again); its dependants keep
   running. `sprite-env services create/start/restart` fails when the service exits during
   `--duration`, and `--no-stream` with an explicit `--duration` still waits it out, silently.
   **Logs are bounded** (ours): the live log is rotated once it passes 8 MiB and two rotations
