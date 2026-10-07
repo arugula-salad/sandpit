@@ -89,7 +89,14 @@ sprite-env checkpoints unmount v3
 Firecracker cannot hot-plug a drive but can swap the file behind one, so every VM boots with
 four placeholder drives and a mount points one at the checkpoint's image: no copy, no reboot.
 Mounts survive a warm suspend, are reset by a cold boot or a restore, and a mounted checkpoint
-cannot be deleted. The sprite's network policy is readable at `/.sprite/policy/network.json`
+cannot be deleted.
+
+A restore replaces the **whole disk**: everything on it goes back to the checkpoint, including
+state a tool keeps beside the work, such as git refs (chant's `refs/chant/wip/*` and replica
+refs) and ledgers committed to a branch (`chant/lifecycle`). Nothing is merged forward. The
+automatic checkpoint taken before every restore holds what was there, so a ref the restore
+rewound can be read back from it (`sprite-env checkpoints mount auto-<n>`) or the restore
+undone. Push what must outlive a restore somewhere off the sprite first. The sprite's network policy is readable at `/.sprite/policy/network.json`
 (information only; enforcement is on the host).
 
 Checkpoint calls ride a guest-initiated vsock channel to a per-VM listener bound to that one
@@ -121,6 +128,12 @@ The pattern this is for: set a template sprite up once (install the app, define 
 visitor and redirect to the new sprite's `url`. Services travel with the disk and the URL
 starts the sprite on demand, so nothing has to be run in the clone: create to first HTTP
 response measured 475 ms, without reflinks.
+
+Spawning is opt-in per sprite: a sprite has no spawn policy until one is set through the API
+from outside (`POST /v1/sprites/{name}/policy/spawn`), and without one every spawn route from
+inside answers 403. Nothing inside a sprite can grant it. So it is a capability the operator
+gives a sprite, separate from anything a workspace declares about the box (chant's box
+`capabilities` are not read here): a box that should not spawn simply never gets the policy.
 
 What a spawner can and cannot do:
 

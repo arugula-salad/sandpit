@@ -57,6 +57,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /internal/activity", s.handleActivity)
 	mux.HandleFunc("POST /internal/presuspend", s.handlePresuspend)
 	mux.HandleFunc("POST /internal/resumed", s.handleResumed)
+	mux.HandleFunc("POST /internal/lease-expiring", s.handleLeaseExpiring)
 	mux.HandleFunc("POST /internal/policy", s.handlePolicy)
 	mux.HandleFunc("POST /internal/netpolicy", s.handleNetPolicyFile)
 	mux.HandleFunc("POST /internal/poweroff", func(w http.ResponseWriter, r *http.Request) {
@@ -438,8 +439,13 @@ func (s *Server) handlePresuspend(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleActivity(w http.ResponseWriter, r *http.Request) {
 	// A live task is a hold: it counts as activity for as long as it lasts, so
 	// the idle window only starts once the last one is released or expires.
+	// A running keep_awake service is a hold the same way.
 	tasks := len(s.tasks.live())
-	if tasks > 0 {
+	awake := 0
+	if s.Services != nil {
+		awake = s.Services.KeepingAwake()
+	}
+	if tasks > 0 || awake > 0 {
 		s.Sessions.touch()
 	}
 	last, attached := s.Sessions.Activity()
@@ -448,6 +454,7 @@ func (s *Server) handleActivity(w http.ResponseWriter, r *http.Request) {
 		"idle_ms":           time.Since(last).Milliseconds(),
 		"attached_sessions": attached,
 		"tasks":             tasks,
+		"awake_services":    awake,
 	})
 }
 

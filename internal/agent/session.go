@@ -275,6 +275,8 @@ func baseEnv(home, uname string) []string {
 	env := []string{
 		"PATH=" + defaultPath + ":" + localBin,
 		"HOME=" + home, "USER=" + uname, "LOGNAME=" + uname, "LANG=C.UTF-8", "SHELL=" + shell,
+		// The XDG default, set so a path written as ${XDG_STATE_HOME}/... expands.
+		"XDG_STATE_HOME=" + filepath.Join(home, ".local", "state"),
 	}
 	for _, kv := range imageEnv() {
 		if v, ok := strings.CutPrefix(kv, "PATH="); ok && !strings.Contains(":"+v+":", ":"+localBin+":") {

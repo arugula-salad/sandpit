@@ -12,7 +12,11 @@ A sprite suspends after `--idle-timeout` (30s) with nothing keeping it awake.
   running control-channel operation, session I/O, an open filesystem watch, a live task, and
   checkpoint calls made from inside.
 - **Does not:** services and their output, port notifications, filesystem events, and idle
-  pooled `/control` or `ports/watch` sockets (these are closed at suspend).
+  pooled `/control` or `ports/watch` sockets (these are closed at suspend). A service created
+  with `keep_awake: true` (`sprite-env services create --keep-awake`, ours) is the exception:
+  while it runs it holds the sprite awake like a task does, which is what a service whose
+  work is its own timer (an in-box cron) needs. Without it, such a service does nothing
+  while the sprite is suspended.
 
 It goes cold after `--warm-ttl` (1h), which drops memory state: processes are gone, the
 filesystem is intact. TCP connections never survive a suspend. The guest clock is stepped to
@@ -93,6 +97,13 @@ curl "$SPRITES_API_URL/sandpit/v1/sprites/preview-412/lease"
   between.
 - Two events say what happened: `sprite.expiring` once per deadline, a lead time ahead of it
   (5 minutes by default), and `sprite.expired` just before the `sprite.deleted` that follows.
+- The guest is told too, at the same moment as `sprite.expiring`, and woken for it if it is
+  suspended or cold. The lead time is its grace period: a task named `lease-expiring` holds
+  it awake until the deadline, `/.sprite/lease.json` gives `expires_at`, and each executable
+  in `/.sprite/hooks/lease-expiring.d/` runs in name order as the sprite user with
+  `SPRITE_LEASE_EXPIRES_AT` set. That is where a box pushes work it would otherwise lose
+  (unpushed git refs, say). The notice is best effort: a sprite that cannot be woken is still
+  deleted at its deadline, and a renewal does not recall a notice already sent.
 
 **Leases for a spawner's children** are the reason all this exists. A lobby that hands every
 visitor a sprite reaches `spawn_policy.max_children` and stays there, because nothing frees a

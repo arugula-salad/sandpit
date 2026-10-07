@@ -70,3 +70,23 @@ func TestADeadlineChangeAfterTheReapIsRefused(t *testing.T) {
 		t.Fatalf("a refused change still changed the record: %+v", cur)
 	}
 }
+
+// The guest is told once per deadline, when sprite.expiring goes out, so it
+// can save what the deletion would lose.
+func TestTheGuestIsToldItsLeaseIsRunningOut(t *testing.T) {
+	l := newTestEngine(t, Options{})
+	var told []time.Time
+	l.leases.notify = func(_ store.Record, at time.Time) { told = append(told, at) }
+	at := time.Now().Add(time.Minute)
+	sp := createSprite(t, l, "game", expiresAt(at))
+	l.leases.warn(sp.Record, time.Now())
+	l.leases.sweep()
+	if len(told) != 1 || !told[0].Equal(at) {
+		t.Fatalf("told %v, want once for %s", told, at)
+	}
+	far := createSprite(t, l, "later", expiresAt(time.Now().Add(time.Hour)))
+	l.leases.warn(far.Record, time.Now())
+	if len(told) != 1 {
+		t.Fatalf("told about a lease outside the warning window: %v", told)
+	}
+}

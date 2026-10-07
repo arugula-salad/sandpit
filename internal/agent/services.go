@@ -103,6 +103,11 @@ type ServiceDef struct {
 	HTTPPort *int              `json:"http_port"`
 	Env      map[string]string `json:"env,omitempty"`
 	Dir      string            `json:"dir,omitempty"`
+	// KeepAwake (ours) makes the service count as activity while it runs, so
+	// the sprite is not idle-suspended under it: a service whose work is its
+	// own timer (an in-box cron) needs that. Other services never keep a
+	// sprite awake.
+	KeepAwake bool `json:"keep_awake,omitempty"`
 }
 
 type ServiceState struct {
@@ -487,6 +492,19 @@ func (sv *Supervisor) Delete(name string) error {
 	return os.Remove(sv.defPath(name))
 }
 
+// KeepingAwake is how many keep_awake services are running now.
+func (sv *Supervisor) KeepingAwake() int {
+	sv.mu.Lock()
+	defer sv.mu.Unlock()
+	n := 0
+	for _, s := range sv.services {
+		if s.def.KeepAwake && s.cmd != nil {
+			n++
+		}
+	}
+	return n
+}
+
 func (sv *Supervisor) Start(name string) error {
 	sv.mu.Lock()
 	defer sv.mu.Unlock()
@@ -602,7 +620,8 @@ func (sv *Supervisor) pumpLines(s *service, r *os.File, stream string, wg *sync.
 }
 
 // emitLocked fans an event out to stream subscribers and appends output to the log file.
-// Service output deliberately does not count as sprite activity: services must not keep a sprite awake.
+// Service output deliberately does not count as sprite activity: only a
+// keep_awake service keeps a sprite awake, and that by running (KeepingAwake).
 func (sv *Supervisor) emitLocked(s *service, ev ServiceEvent) {
 	now := time.Now().UTC()
 	ev.Timestamp = now.UnixMilli()

@@ -53,3 +53,13 @@ func TestBaseEnvLocalBin(t *testing.T) {
 		t.Fatalf("PATH = %q, want %q", got, want)
 	}
 }
+
+// XDG_STATE_HOME is the XDG default, set so a path written with it expands.
+func TestBaseEnvXDGStateHome(t *testing.T) {
+	old := imageMetaPath
+	imageMetaPath = filepath.Join(t.TempDir(), "image.json")
+	t.Cleanup(func() { imageMetaPath = old })
+	if got := envValue(baseEnv("/home/sprite", "sprite"), "XDG_STATE_HOME"); got != "/home/sprite/.local/state" {
+		t.Fatalf("XDG_STATE_HOME = %q", got)
+	}
+}

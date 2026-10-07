@@ -148,6 +148,7 @@ func services(verb string, args []string) error {
 		dir := fs.String("dir", "", "working directory")
 		needs := fs.String("needs", "", "comma-separated services that must start first")
 		port := fs.Int("http-port", 0, "route the sprite's URL to this port and start the service on demand")
+		keepAwake := fs.Bool("keep-awake", false, "while it runs, the service keeps the sprite from idle-suspending (ours)")
 		duration := fs.String("duration", "5s", "how long the service must stay up after starting; its logs stream meanwhile")
 		noStream := fs.Bool("no-stream", false, "don't stream logs after creation (with no --duration, don't wait either)")
 		pos, err := parse(fs, args, 1)
@@ -163,6 +164,9 @@ func services(verb string, args []string) error {
 		}
 		if *port != 0 {
 			def["http_port"] = *port
+		}
+		if *keepAwake {
+			def["keep_awake"] = true
 		}
 		if *env != "" {
 			vars := map[string]string{}
