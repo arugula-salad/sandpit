@@ -50,6 +50,21 @@ func (s *Server) guestAPI(rec store.Record, g *engine.GuestChan) http.Handler {
 	mux.HandleFunc("POST /v1/checkpoints/{id}/restore", bind(s.restoreCheckpoint))
 	mux.HandleFunc("POST /v1/checkpoints/{id}/mount", bind(s.mountCheckpoint))
 	mux.HandleFunc("POST /v1/checkpoints/{id}/unmount", bind(s.unmountCheckpoint))
+	// The sprite's environment, for the services the agent starts at boot: an
+	// exec session gets it on the request (withSpriteEnv), a service has none.
+	// Not bound, so asking for it does not count as activity.
+	mux.HandleFunc("GET /internal/environment", func(w http.ResponseWriter, r *http.Request) {
+		cur, err := s.store.Get(sp.ID)
+		if err != nil {
+			writeErr(w, http.StatusNotFound, "not_found", "sprite not found")
+			return
+		}
+		env := cur.Environment
+		if env == nil {
+			env = map[string]string{}
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"environment": env})
+	})
 	s.registerGuestSpawn(mux, bind)
 	s.registerGuestEvents(mux, sp)
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {

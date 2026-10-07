@@ -87,15 +87,20 @@ func serve(args []string) {
 		agent.NewSystemSupervisor(dir, "/var/log/sandpit/services", "/run/sandpit-system-services")
 	}
 
-	// Service starts and crashes go to sandpitd's event stream, which only exists over vsock.
+	// Service starts and crashes go to sandpitd's event stream, which only exists
+	// over vsock, and so does the sprite's environment the services start with.
 	var report func(agent.ServiceReport)
+	var spriteEnv []string
 	if *listen == "vsock" {
 		report = agent.NewReporter(dialHost).Report
+		if spriteEnv, err = agent.FetchSpriteEnv(dialHost, 5*time.Second); err != nil {
+			log.Printf("services start without the sprite's environment: %v", err)
+		}
 	}
 	srv := &agent.Server{
 		Sessions: agent.NewManager(),
 		StateDir: *stateDir,
-		Services: agent.NewReportingSupervisor(*stateDir, *runDir, report),
+		Services: agent.NewSpriteSupervisor(*stateDir, *runDir, report, spriteEnv),
 		Poweroff: func() {
 			unix.Sync()
 			// With reboot=k on the kernel command line this resets via the

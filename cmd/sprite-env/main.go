@@ -148,8 +148,8 @@ func services(verb string, args []string) error {
 		dir := fs.String("dir", "", "working directory")
 		needs := fs.String("needs", "", "comma-separated services that must start first")
 		port := fs.Int("http-port", 0, "route the sprite's URL to this port and start the service on demand")
-		duration := fs.String("duration", "5s", "how long to stream logs after starting")
-		noStream := fs.Bool("no-stream", false, "don't stream logs after creation")
+		duration := fs.String("duration", "5s", "how long the service must stay up after starting; its logs stream meanwhile")
+		noStream := fs.Bool("no-stream", false, "don't stream logs after creation (with no --duration, don't wait either)")
 		pos, err := parse(fs, args, 1)
 		if err != nil {
 			return err
@@ -175,15 +175,15 @@ func services(verb string, args []string) error {
 			}
 			def["env"] = vars
 		}
-		return stream(http.MethodPut, "/v1/services/"+url.PathEscape(pos[0]), *duration, *noStream, def)
+		return stream(http.MethodPut, "/v1/services/"+url.PathEscape(pos[0]), watchFor(fs, *duration, *noStream), *noStream, def)
 	case "start", "restart":
-		duration := fs.String("duration", "5s", "how long to stream logs after starting")
-		noStream := fs.Bool("no-stream", false, "don't stream logs")
+		duration := fs.String("duration", "5s", "how long the service must stay up after starting; its logs stream meanwhile")
+		noStream := fs.Bool("no-stream", false, "don't stream logs (with no --duration, don't wait either)")
 		pos, err := parse(fs, args, 1)
 		if err != nil {
 			return err
 		}
-		return stream(http.MethodPost, "/v1/services/"+url.PathEscape(pos[0])+"/"+verb, *duration, *noStream, nil)
+		return stream(http.MethodPost, "/v1/services/"+url.PathEscape(pos[0])+"/"+verb, watchFor(fs, *duration, *noStream), *noStream, nil)
 	case "stop":
 		timeout := fs.String("timeout", "", "how long to wait for a clean exit before SIGKILL (default 10s)")
 		pos, err := parse(fs, args, 1)
@@ -211,12 +211,25 @@ func services(verb string, args []string) error {
 	return usageErr("unknown services command %q", verb)
 }
 
-// stream runs a create/start/restart. --no-stream still has to read the (now
-// immediate) response to learn whether the action failed; it just prints nothing.
+// watchFor is how long a create/start/restart watches the service. --no-stream
+// alone returns as soon as the action is done, as upstream's does; with an
+// explicit --duration it still waits that long, silently, so a caller that
+// wants no output (chant's apply, say) still learns whether the service stayed up.
+func watchFor(fs *flag.FlagSet, duration string, quiet bool) string {
+	explicit := false
+	fs.Visit(func(f *flag.Flag) { explicit = explicit || f.Name == "duration" })
+	if quiet && !explicit {
+		return "0s"
+	}
+	return duration
+}
+
+// stream runs a create/start/restart. Quiet still reads the response to learn
+// whether the action failed, or the service exited while it was watched; it
+// just prints nothing.
 func stream(method, path, duration string, quiet bool, body any) error {
 	q := url.Values{"duration": {duration}}
 	if quiet {
-		q.Set("duration", "0s")
 		return request(method, path, q, body, io.Discard)
 	}
 	return request(method, path, q, body, os.Stdout)
@@ -450,14 +463,34 @@ func request(method, path string, q url.Values, body any, out io.Writer) error {
 	}
 
 	var failed apiError
+	started := false
 	sc := bufio.NewScanner(resp.Body)
 	sc.Buffer(make([]byte, 64*1024), 4<<20)
 	for sc.Scan() {
 		fmt.Fprintln(out, sc.Text())
 		// Service streams put the message in "data", checkpoint streams in "error".
-		var ev struct{ Type, Data, Error string }
-		if json.Unmarshal(sc.Bytes(), &ev) == nil && ev.Type == "error" {
+		var ev struct {
+			Type, Data, Error string
+			ExitCode          *int `json:"exit_code"`
+		}
+		if json.Unmarshal(sc.Bytes(), &ev) != nil {
+			continue
+		}
+		switch ev.Type {
+		case "error":
 			failed = apiError(ev.Error + ev.Data)
+		case "started":
+			started = true
+		case "exit":
+			// An exit after the start this stream watched is the service dying
+			// inside --duration; an exit before it is the old process a restart stopped.
+			if started && failed == "" {
+				code := -1
+				if ev.ExitCode != nil {
+					code = *ev.ExitCode
+				}
+				failed = apiError(fmt.Sprintf("the service exited with code %d while it was watched", code))
+			}
 		}
 	}
 	if failed != "" {

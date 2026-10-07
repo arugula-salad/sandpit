@@ -21,6 +21,11 @@
   to and starts on demand (otherwise the URL goes to port 8080). Definitions live on the
   sprite's disk in `/.sprite/services/`, logs in `/.sprite/logs/services/<name>.log`, so both
   travel with checkpoints. Every service starts on a cold boot.
+  A service gets the sprite's `environment` (from create), under its own `env`, as an exec
+  session does; the agent asks sandpitd for it when it starts. A service without `http_port`
+  lists it as `null`. A service another one `needs` can be deleted (and created again); its dependants keep
+  running. `sprite-env services create/start/restart` fails when the service exits during
+  `--duration`, and `--no-stream` with an explicit `--duration` still waits it out, silently.
   **Logs are bounded** (ours): the live log is rotated once it passes 8 MiB and two rotations
   are kept beside it (`<name>.log.1`, `.log.2`), so one service costs at most ~24 MiB whatever
   it prints — it is the sprite's disk, and that disk is on the volume every sprite shares. A
