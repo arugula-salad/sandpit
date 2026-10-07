@@ -31,7 +31,9 @@ type meta struct {
 	AutoArchive int  `json:"autoArchiveInterval"`
 	AutoDelete  int  `json:"autoDeleteInterval"`
 	AutoPause   *int `json:"autoPauseInterval,omitempty"`
-	// NetworkBlockAll and NetworkAllowList are kept and reported, not enforced.
+	// NetworkBlockAll and NetworkAllowList are always unset: create refuses a
+	// sandbox that asks for either, since nothing here enforces them. They stay
+	// for the response shape and for sandboxes created before the refusal.
 	NetworkBlockAll  bool   `json:"networkBlockAll,omitempty"`
 	NetworkAllowList string `json:"networkAllowList,omitempty"`
 	// PreviewToken is what a preview URL wants as x-daytona-preview-token

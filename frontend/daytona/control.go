@@ -287,6 +287,13 @@ func (f *Frontend) create(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, r, http.StatusBadRequest, "BAD_REQUEST", "GPUs are not supported by this server")
 		return
 	}
+	// Never "accepted but not enforced" (internal/server/policy.go): a client
+	// that asks for limited egress must know the sandbox is not confined.
+	if req.NetworkBlockAll || strings.TrimSpace(req.NetworkAllowList) != "" {
+		writeErr(w, r, http.StatusBadRequest, "policy_unenforceable",
+			"networkBlockAll and networkAllowList are not enforced by this server, so a sandbox that asks for them is refused; create it without them")
+		return
+	}
 	m := meta{Name: req.Name, Labels: req.Labels, Env: req.Env, User: defaultUser, Public: req.Public,
 		Target: req.Target, Snapshot: defaultSnapshot, CPU: defaultCPU, MemGiB: defaultMemGiB,
 		AutoStop: defaultAutoStop, AutoArchive: 7 * 24 * 60, AutoDelete: -1, AutoPause: req.AutoPauseInterval,

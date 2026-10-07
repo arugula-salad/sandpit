@@ -951,3 +951,29 @@ func TestHealthz(t *testing.T) {
 		t.Fatalf("POST healthz: %d %q", r.code, r.body)
 	}
 }
+
+// Egress limits are refused, not kept and ignored: a client asking for a
+// confined sandbox must not get an open one (sandpit#8).
+func TestCreateRefusesUnenforcedEgress(t *testing.T) {
+	fx := newFixture(t)
+	for _, body := range []map[string]any{
+		{"networkBlockAll": true},
+		{"networkAllowList": "10.0.0.0/8"},
+		{"networkBlockAll": true, "networkAllowList": "1.1.1.1/32"},
+	} {
+		r := fx.do("POST", "/api/sandbox", adminKey, body)
+		var e struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		}
+		r.json(t, &e)
+		if r.code != http.StatusBadRequest || e.Code != "policy_unenforceable" || !strings.Contains(e.Message, "not enforced") {
+			t.Errorf("%v: %d %s", body, r.code, r.body)
+		}
+	}
+	if n := fx.st.Count(); n != 0 {
+		t.Fatalf("%d sandboxes after refused creates", n)
+	}
+	// Open egress, spelled out, is fine.
+	fx.create(map[string]any{"networkBlockAll": false, "networkAllowList": ""})
+}

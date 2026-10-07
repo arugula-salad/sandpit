@@ -46,6 +46,9 @@ golden traces only in IDs, timestamps, hosts, and what is listed here.
 - envd's own auth is envd's, unchanged: the access token, signed URLs, Basic auth for the user.
 - `network.allowPublicTraffic: false` and its `e2b-traffic-access-token` are not honoured:
   ports are reachable by anyone who can reach the listener, as on hosted E2B by default.
+- Egress limits are not enforced, so a create with `allow_internet_access: false` or a
+  `network.denyOut` is refused (400, `policy_unenforceable: ...`) rather than started open.
+  `network.allowOut` with nothing denied limits nothing and is accepted.
 
 **Lifecycle.**
 
