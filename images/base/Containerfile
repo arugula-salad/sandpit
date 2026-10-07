@@ -36,4 +36,7 @@ RUN set -eu; cd /tmp; \
 # ~/.local/bin is on the exec PATH (internal/agent/session.go). Created here as
 # sprite: a root-owned ~/.local would make an adapter install under it fail with
 # EACCES.
-RUN install -d -o sprite -g sprite -m 755 /home/sprite/.local /home/sprite/.local/bin /home/sprite/.local/share
+# XDG_STATE_HOME is set to ~/.local/state for every exec session and service
+# (baseEnv); the ENV covers anything started another way.
+RUN install -d -o sprite -g sprite -m 755 /home/sprite/.local /home/sprite/.local/bin /home/sprite/.local/share /home/sprite/.local/state
+ENV XDG_STATE_HOME=/home/sprite/.local/state

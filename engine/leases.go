@@ -1,8 +1,10 @@
 package engine
 
 import (
+	"context"
 	"errors"
 	"log/slog"
+	"net/http"
 	"sync"
 	"time"
 
@@ -38,6 +40,11 @@ import (
 // the operator has set no Options.LeaseWarning.
 const defaultLeaseWarning = 5 * time.Minute
 
+// noticeGuests is whether an expiring lease is told to the guest. The package's
+// tests turn it off: their engines boot no VMs, and a wake that fails says so
+// in the event stream. A test that wants the notice sets leases.notify.
+var noticeGuests = true
+
 // leases is the reaper and the bookkeeping the reaper needs.
 type leases struct {
 	store   *store.Store
@@ -56,11 +63,18 @@ type leases struct {
 	// finds its sprite here has lost the race and is refused, rather than
 	// renewing a lease on a disk that is already going away.
 	reaping map[string]bool
+	// notify tells a sprite's guest its lease is running out (noticeExpiring);
+	// tests replace it.
+	notify func(sp store.Record, at time.Time)
 }
 
 func newLeases(st *store.Store, log *slog.Logger, life *Engine, warning time.Duration) *leases {
-	return &leases{store: st, log: log, life: life, warnFor: warning,
+	ls := &leases{store: st, log: log, life: life, warnFor: warning,
 		warned: map[string]time.Time{}, reaping: map[string]bool{}}
+	if noticeGuests {
+		ls.notify = func(sp store.Record, at time.Time) { go ls.noticeExpiring(sp, at) }
+	}
+	return ls
 }
 
 // StartReaping sweeps the leases once, now, and lets the janitor sweep them
@@ -142,6 +156,27 @@ func (ls *leases) warn(sp store.Record, now time.Time) {
 	ls.log.Info("sprite lease running out", "sprite", ls.life.label(sp), "expires_at", sp.ExpiresAt)
 	ls.life.Emit(sp, "sprite.expiring", map[string]any{
 		"expires_at": sp.ExpiresAt.UTC().Format(time.RFC3339), "in_ms": sp.ExpiresAt.Sub(now).Milliseconds()})
+	if (sp.API == store.Sprites || sp.API == "") && ls.notify != nil { // empty is the Sprites API
+		ls.notify(sp, *sp.ExpiresAt)
+	}
+}
+
+// noticeExpiring tells the guest of a sprite whose lease is about to run out,
+// waking it if it is suspended or cold: the warning window is its grace period
+// to save what the deletion would lose (internal/agent/lease.go), and the
+// guest holds itself awake for it. Best effort: a sprite that cannot be woken
+// or answered is still deleted at its deadline.
+func (ls *leases) noticeExpiring(sp store.Record, at time.Time) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	m, release, err := ls.life.Acquire(ctx, sp)
+	if err == nil {
+		err = agentCall(ctx, m, http.MethodPost, "/internal/lease-expiring", map[string]string{"expires_at": at.UTC().Format(time.RFC3339)}, nil)
+		release()
+	}
+	if err != nil {
+		ls.log.Warn("could not tell the guest its lease is running out", "sprite", ls.life.label(sp), "err", err)
+	}
 }
 
 // reap deletes one expired sprite. sp is a candidate from a list read before

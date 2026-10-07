@@ -86,3 +86,7 @@ func collect(sub *Subscription) []Event {
 		}
 	}
 }
+
+// The engines here boot no VMs, so an expiring lease is not told to a guest
+// (noticeGuests); TestTheGuestIsToldItsLeaseIsRunningOut sets its own notify.
+func init() { noticeGuests = false }

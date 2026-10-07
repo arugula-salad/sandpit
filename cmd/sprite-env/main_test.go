@@ -151,3 +151,15 @@ func TestNoStreamKeepsAnExplicitDuration(t *testing.T) {
 		}
 	}
 }
+
+func TestServicesCreateKeepAwake(t *testing.T) {
+	got := serve(t, 200, "application/x-ndjson", `{"type":"complete"}`+"\n")
+	if err := services("create", []string{"cron", "--cmd", "x", "--keep-awake", "--no-stream"}); err != nil {
+		t.Fatal(err)
+	}
+	var def map[string]any
+	json.NewDecoder(got.Body).Decode(&def)
+	if def["keep_awake"] != true {
+		t.Errorf("definition = %v", def)
+	}
+}
