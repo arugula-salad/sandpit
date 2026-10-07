@@ -226,6 +226,20 @@ type createReq struct {
 		Enabled bool `json:"enabled"`
 	} `json:"autoResume"`
 	Secure *bool `json:"secure"`
+	// Egress limits. Nothing here enforces them, so create refuses a sandbox
+	// that asks for any (restrictsEgress) rather than dropping them.
+	AllowInternetAccess *bool `json:"allow_internet_access"`
+	Network             *struct {
+		AllowOut []string `json:"allowOut"`
+		DenyOut  []string `json:"denyOut"`
+	} `json:"network"`
+}
+
+// restrictsEgress is whether req limits the sandbox's outbound traffic:
+// allow_internet_access false, or anything in network.denyOut. allowOut alone
+// only makes exceptions to a deny, so it limits nothing.
+func (req createReq) restrictsEgress() bool {
+	return (req.AllowInternetAccess != nil && !*req.AllowInternetAccess) || (req.Network != nil && len(req.Network.DenyOut) > 0)
 }
 
 // template resolves a template name or ID. Only the base template exists:
@@ -249,6 +263,12 @@ func (f *Frontend) create(w http.ResponseWriter, r *http.Request, def time.Durat
 	tmpl, alias, ok := template(req.TemplateID)
 	if !ok {
 		writeErr(w, http.StatusNotFound, fmt.Sprintf("template '%s' not found", req.TemplateID))
+		return
+	}
+	// Never "accepted but not enforced" (internal/server/policy.go): a client
+	// that asks for limited egress must know the sandbox is not confined.
+	if req.restrictsEgress() {
+		writeErr(w, http.StatusBadRequest, "policy_unenforceable: this server does not enforce allow_internet_access=false or network.denyOut, so a sandbox that asks for them is refused")
 		return
 	}
 	timeout, ok := f.timeoutOf(w, req.Timeout, def)

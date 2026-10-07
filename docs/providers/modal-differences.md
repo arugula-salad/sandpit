@@ -16,9 +16,10 @@ SDKs, golden traces of hosted Modal) is planned in
 
 **Known issues**, found by that plan's spike and fixed in its Phase 0:
 
-- `Sandbox.create` ignores fields it cannot honour instead of refusing them. Notably
-  `block_network=True` and the outbound allowlists are accepted and the sandbox gets open
-  egress; also `idle_timeout`, `readiness_probe`, `custom_domain` and cpu/memory limits.
+- `Sandbox.create` ignores fields it cannot honour instead of refusing them: `idle_timeout`,
+  `readiness_probe`, `custom_domain` and cpu/memory limits. `block_network=True` and the
+  outbound allowlists (`cidr_allowlist`, domains) are refused (`FAILED_PRECONDITION`,
+  `policy_unenforceable`) rather than given open egress.
 - Exec runs with stdin on `/dev/null`, so a command that reads stdin (`sb.exec("cat")`) ends at
   once instead of waiting, as it would on hosted Modal.
 - Exec output past 64 MiB per stream is dropped without an error.

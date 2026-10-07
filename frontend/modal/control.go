@@ -219,6 +219,20 @@ func (c *control) SandboxCreate(ctx context.Context, req *modalpb.SandboxCreateR
 	return &modalpb.SandboxCreateResponse{SandboxId: rec.ID, Metadata: &modalpb.SandboxHandleMetadata{AppId: m.AppID}}, nil
 }
 
+// restrictsEgress is whether def limits the sandbox's outbound traffic:
+// block_network, or network_access BLOCKED or ALLOWLIST (cidr_allowlist and
+// the domain allowlist arrive as ALLOWLIST).
+func restrictsEgress(def *modalpb.Sandbox) bool {
+	if def.GetBlockNetwork() {
+		return true
+	}
+	switch def.GetNetworkAccess().GetNetworkAccessType() {
+	case modalpb.NetworkAccess_BLOCKED, modalpb.NetworkAccess_ALLOWLIST:
+		return true
+	}
+	return len(def.GetNetworkAccess().GetAllowedCidrs()) > 0 || len(def.GetNetworkAccess().GetAllowedDomains()) > 0
+}
+
 func unsupported(what string) error {
 	return status.Errorf(codes.Unimplemented, "this Modal-compatible server does not support %s (docs/providers/modal-differences.md)", what)
 }
@@ -248,6 +262,11 @@ func (f *Frontend) create(ctx context.Context, appID string, def *modalpb.Sandbo
 		return store.Record{}, meta{}, unsupported("named sandboxes")
 	case len(tags) > 0:
 		return store.Record{}, meta{}, unsupported("sandbox tags")
+	case restrictsEgress(def):
+		// Never "accepted but not enforced" (internal/server/policy.go): a client
+		// that asks for limited egress must know the sandbox is not confined.
+		return store.Record{}, meta{}, status.Error(codes.FailedPrecondition,
+			"policy_unenforceable: this Modal-compatible server does not enforce block_network or an outbound allowlist, so a sandbox that asks for one is refused (docs/providers/modal-differences.md)")
 	}
 	var disk string
 	f.state.view(func(d *stateData) { disk = d.Images[def.ImageId] })

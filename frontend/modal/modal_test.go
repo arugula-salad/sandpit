@@ -739,3 +739,24 @@ func TestResourceLimits(t *testing.T) {
 		t.Fatalf("config %+v", rec.Config)
 	}
 }
+
+// block_network and outbound allowlists are refused, not accepted with open
+// egress: a client asking for a confined sandbox must not get an open one (sandpit#8).
+func TestSandboxCreateRefusesUnenforcedEgress(t *testing.T) {
+	fx := newFixture(t)
+	for name, def := range map[string]*modalpb.Sandbox{
+		"block_network": {BlockNetwork: true},
+		"BLOCKED":       {NetworkAccess: &modalpb.NetworkAccess{NetworkAccessType: modalpb.NetworkAccess_BLOCKED}},
+		"cidr allowlist": {NetworkAccess: &modalpb.NetworkAccess{NetworkAccessType: modalpb.NetworkAccess_ALLOWLIST,
+			AllowedCidrs: []string{"10.0.0.0/8"}}},
+		"domain allowlist": {NetworkAccess: &modalpb.NetworkAccess{AllowedDomains: []string{"example.com"}}},
+	} {
+		def.ImageId = fx.image()
+		_, err := fx.control.SandboxCreateV2(admin(), &modalpb.SandboxCreateV2Request{AppId: fx.app(), Definition: def})
+		if status.Code(err) != codes.FailedPrecondition || !strings.Contains(status.Convert(err).Message(), "policy_unenforceable") {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	// What the client sends by default: open.
+	fx.create(&modalpb.Sandbox{NetworkAccess: &modalpb.NetworkAccess{NetworkAccessType: modalpb.NetworkAccess_OPEN}})
+}

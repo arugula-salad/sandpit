@@ -831,3 +831,27 @@ func TestHealthz(t *testing.T) {
 		t.Fatalf("healthz on a sandbox host: %d %q", w.Code, w.Body)
 	}
 }
+
+// Egress limits are refused, not dropped: a client asking for a confined
+// sandbox must not get an open one (sandpit#8).
+func TestCreateRefusesUnenforcedEgress(t *testing.T) {
+	fx := newFixture(t)
+	for _, body := range []map[string]any{
+		{"templateID": "base", "allow_internet_access": false},
+		{"templateID": "base", "network": map[string]any{"denyOut": []string{"0.0.0.0/0"}, "allowOut": []string{"1.1.1.1"}}},
+	} {
+		wantErr(t, fx.do("POST", "/v2/sandboxes", adminKey, body), 400, "policy_unenforceable")
+	}
+	if n := fx.st.Count(); n != 0 {
+		t.Fatalf("%d records after refused creates", n)
+	}
+	// Open egress, spelled out, and an allowOut with nothing denied, are fine.
+	for _, body := range []map[string]any{
+		{"templateID": "base", "allow_internet_access": true},
+		{"templateID": "base", "network": map[string]any{"allowOut": []string{"1.1.1.1"}}},
+	} {
+		if w := fx.do("POST", "/v2/sandboxes", adminKey, body); w.Code != 201 {
+			t.Fatalf("%v: %d %s", body, w.Code, w.Body)
+		}
+	}
+}

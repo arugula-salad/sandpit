@@ -86,8 +86,9 @@ against a trace of hosted Daytona.
 - `autoDeleteInterval` 0 (`ephemeral`) is enforced: an API stop deletes the sandbox before it
   answers (with state `destroyed`), and an auto-stop deletes it just after. Other auto-delete values and `autoArchiveInterval` are kept and reported,
   not enforced. `autoPauseInterval` above 0 turns auto-stop off (pause is not built).
-- `networkBlockAll` and `networkAllowList` are kept and reported, not enforced (sandpit's own
-  network policy can do this; it is not wired up yet).
+- A create with `networkBlockAll: true` or a `networkAllowList` is refused (400, code
+  `policy_unenforceable`): nothing enforces them yet (sandpit's own network policy could; it is
+  not wired up), and a sandbox that asked to be confined must not come up open.
 - `--max-sprites` bounds how many sandboxes, of every API, exist on the host; a create past it
   is `429` (`DaytonaRateLimitError`). Hosted's limits are per organization quotas.
 - A stop the engine fails answers 500 and leaves the sandbox not marked stopped.
