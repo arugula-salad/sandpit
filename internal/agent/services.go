@@ -94,11 +94,13 @@ func loadLogRotation(stateDir string) LogRotation {
 }
 
 type ServiceDef struct {
-	Name     string            `json:"name"`
-	Cmd      string            `json:"cmd"`
-	Args     []string          `json:"args"`
-	Needs    []string          `json:"needs"`
-	HTTPPort *int              `json:"http_port,omitempty"`
+	Name  string   `json:"name"`
+	Cmd   string   `json:"cmd"`
+	Args  []string `json:"args"`
+	Needs []string `json:"needs"`
+	// HTTPPort is null, not absent, when unset, so a caller comparing a
+	// listing with what it wants sees the port go as well as come.
+	HTTPPort *int              `json:"http_port"`
 	Env      map[string]string `json:"env,omitempty"`
 	Dir      string            `json:"dir,omitempty"`
 }
@@ -163,6 +165,10 @@ type Supervisor struct {
 	// mu held and must not block.
 	report func(ServiceReport)
 
+	// spriteEnv is the sprite's own environment (KEY=value), between the base
+	// environment and a service's env, as an exec session gets it.
+	spriteEnv []string
+
 	mu       sync.Mutex
 	services map[string]*service
 	logRot   LogRotation
@@ -176,8 +182,15 @@ func NewSupervisor(stateDir, runDir string) *Supervisor {
 // NewReportingSupervisor is NewSupervisor with report set before the first
 // service starts, so the starts at boot are reported too.
 func NewReportingSupervisor(stateDir, runDir string, report func(ServiceReport)) *Supervisor {
+	return NewSpriteSupervisor(stateDir, runDir, report, nil)
+}
+
+// NewSpriteSupervisor is NewReportingSupervisor with the sprite's environment
+// (KEY=value), which every service gets over the base environment and under its
+// own env, the way an exec session gets it over sandpitd's exec route.
+func NewSpriteSupervisor(stateDir, runDir string, report func(ServiceReport), spriteEnv []string) *Supervisor {
 	sv := &Supervisor{defsDir: filepath.Join(stateDir, "services"), logsDir: filepath.Join(stateDir, "logs", "services"),
-		runDir: runDir, services: map[string]*service{}, report: report, logRot: loadLogRotation(stateDir)}
+		runDir: runDir, services: map[string]*service{}, report: report, logRot: loadLogRotation(stateDir), spriteEnv: spriteEnv}
 	os.MkdirAll(sv.defsDir, 0o755)
 	os.MkdirAll(sv.logsDir, 0o755)
 	os.MkdirAll(runDir, 0o755)
@@ -407,13 +420,6 @@ func (sv *Supervisor) Define(def ServiceDef) error {
 			return fmt.Errorf("needs unknown service %q", need)
 		}
 	}
-	if def.HTTPPort != nil {
-		for n, o := range sv.services {
-			if n != def.Name && o.def.HTTPPort != nil {
-				return fmt.Errorf("%w: another service already has an HTTP port configured", ErrServiceConflict)
-			}
-		}
-	}
 	old, existed := sv.services[def.Name]
 	if existed {
 		prev := old.def
@@ -427,6 +433,20 @@ func (sv *Supervisor) Define(def ServiceDef) error {
 	b, _ := json.MarshalIndent(def, "", "  ")
 	if err := os.WriteFile(sv.defPath(def.Name), b, 0o644); err != nil {
 		return err
+	}
+	// One service holds the HTTP port. A new holder takes it from the old one,
+	// whose definition loses http_port (and keeps running), so moving the port
+	// from one service to another works in either order.
+	if def.HTTPPort != nil {
+		for n, o := range sv.services {
+			if n == def.Name || o.def.HTTPPort == nil {
+				continue
+			}
+			o.def.HTTPPort = nil
+			if b, err := json.MarshalIndent(o.def, "", "  "); err == nil {
+				os.WriteFile(sv.defPath(n), b, 0o644)
+			}
+		}
 	}
 	if existed {
 		sv.stopLocked(old, defaultStopTimeout)
@@ -461,13 +481,9 @@ func (sv *Supervisor) Delete(name string) error {
 	if !ok {
 		return ErrServiceNotFound
 	}
-	for n, o := range sv.services {
-		for _, need := range o.def.Needs {
-			if need == name {
-				return fmt.Errorf("%w: service %q needs it", ErrServiceConflict, n)
-			}
-		}
-	}
+	// A service another one needs can go too: deleting and re-creating it is
+	// how a definition is replaced, and its dependants keep running. Until a
+	// service of that name is created again, starting a dependant skips it.
 	sv.stopLocked(s, defaultStopTimeout)
 	if s.logFile != nil {
 		s.logFile.Close()
@@ -518,7 +534,7 @@ func (sv *Supervisor) spawnLocked(s *service) {
 	if dir == "" {
 		dir = home
 	}
-	env := baseEnv(home, uname)
+	env := append(baseEnv(home, uname), sv.spriteEnv...)
 	for k, v := range s.def.Env {
 		env = append(env, k+"="+v)
 	}

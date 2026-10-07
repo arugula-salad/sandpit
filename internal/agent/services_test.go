@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -132,17 +133,8 @@ func TestServiceMissingBinaryIsReportedNotFatal(t *testing.T) {
 
 func TestServiceValidation(t *testing.T) {
 	ts, _, _ := newServiceServer(t)
-	put(t, ts, "a", `{"cmd":"sleep","args":["30"],"http_port":3000}`, "duration=10ms")
-	if code, _ := put(t, ts, "b", `{"cmd":"sleep","args":["30"],"http_port":4000}`, ""); code != http.StatusConflict {
-		t.Errorf("second http_port service: status %d, want 409", code)
-	}
 	if code, _ := put(t, ts, "c", `{"cmd":"sleep","needs":["nope"]}`, ""); code != http.StatusBadRequest {
 		t.Errorf("unknown dependency: status %d, want 400", code)
-	}
-	put(t, ts, "dep", `{"cmd":"sleep","args":["30"],"needs":["a"]}`, "duration=10ms")
-	req, _ := http.NewRequest(http.MethodDelete, ts.URL+"/services/a", nil)
-	if resp, _ := http.DefaultClient.Do(req); resp.StatusCode != http.StatusConflict {
-		t.Errorf("deleting a needed service: status %d, want 409", resp.StatusCode)
 	}
 	if resp, _ := http.Get(ts.URL + "/services/missing"); resp.StatusCode != http.StatusNotFound {
 		t.Errorf("get missing: status %d", resp.StatusCode)
@@ -175,5 +167,99 @@ func TestServicesStartInDependencyOrderOnBoot(t *testing.T) {
 	}
 	if !(started["z-db"].Before(started["m-cache"]) && started["m-cache"].Before(started["a-app"])) {
 		t.Fatalf("start order wrong: %v", started)
+	}
+}
+
+// chant's apply moves the port between services one at a time, in either
+// order, so a new holder takes it rather than being refused; the listing then
+// says the old holder has none (null, not absent, so a caller sees it go).
+func TestServiceHTTPPortMovesToTheNewHolder(t *testing.T) {
+	ts, sv, _ := newServiceServer(t)
+	put(t, ts, "a", `{"cmd":"sleep","args":["30"],"http_port":3000}`, "duration=10ms")
+	if code, _ := put(t, ts, "b", `{"cmd":"sleep","args":["30"],"http_port":4000}`, "duration=10ms"); code != http.StatusOK {
+		t.Fatalf("second http_port service: status %d, want 200", code)
+	}
+	a, _ := sv.Get("a")
+	b, _ := sv.Get("b")
+	if a.HTTPPort != nil || b.HTTPPort == nil || *b.HTTPPort != 4000 {
+		t.Fatalf("a.http_port=%v b.http_port=%v", a.HTTPPort, b.HTTPPort)
+	}
+	if a.State.Status != "running" {
+		t.Errorf("a lost its port and its process: %+v", a.State)
+	}
+	if def, _ := os.ReadFile(filepath.Join(sv.defsDir, "a.json")); !bytes.Contains(def, []byte(`"http_port": null`)) {
+		t.Errorf("a's saved definition still has the port: %s", def)
+	}
+	resp, err := http.Get(ts.URL + "/services")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	var list []map[string]any
+	if err := json.Unmarshal(body, &list); err != nil {
+		t.Fatalf("list: %v: %s", err, body)
+	}
+	for _, s := range list {
+		if _, ok := s["http_port"]; !ok {
+			t.Errorf("listing of %v has no http_port key: %s", s["name"], body)
+		}
+	}
+}
+
+// Replacing a definition by delete and create works for a service another one
+// needs: the dependant keeps running, and the need resolves again on create.
+func TestServiceNeededByAnotherCanBeDeletedAndRecreated(t *testing.T) {
+	ts, sv, _ := newServiceServer(t)
+	put(t, ts, "app", `{"cmd":"sleep","args":["30"]}`, "duration=10ms")
+	put(t, ts, "door", `{"cmd":"sleep","args":["30"],"needs":["app"]}`, "duration=10ms")
+	req, _ := http.NewRequest(http.MethodDelete, ts.URL+"/services/app", nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		t.Fatalf("deleting a needed service: status %d", resp.StatusCode)
+	}
+	if door, _ := sv.Get("door"); door.State.Status != "running" {
+		t.Fatalf("door after app's delete: %+v", door.State)
+	}
+	if code, _ := put(t, ts, "app", `{"cmd":"sleep","args":["31"]}`, "duration=10ms"); code != http.StatusOK {
+		t.Fatalf("re-creating app: status %d", code)
+	}
+	// door's need resolves again: a restart starts app first, without error.
+	resp, _ = http.Post(ts.URL+"/services/door/restart?duration=10ms", "", nil)
+	resp.Body.Close()
+	if app, _ := sv.Get("app"); app.State.Status != "running" || len(app.Args) != 1 || app.Args[0] != "31" {
+		t.Fatalf("app = %+v", app)
+	}
+}
+
+// A service gets the sprite's environment, as an exec session does, with its
+// own env over it.
+func TestServiceGetsTheSpritesEnvironment(t *testing.T) {
+	dir := t.TempDir()
+	sv := NewSpriteSupervisor(dir+"/state", dir+"/run", nil, []string{"HUD_IDENTITY_PATH=/state/id", "WHO=sprite"})
+	t.Cleanup(func() {
+		for _, s := range sv.List() {
+			sv.Stop(s.Name, time.Second)
+		}
+	})
+	out := filepath.Join(dir, "env.out")
+	if err := sv.Define(ServiceDef{Name: "envy", Cmd: "sh", Args: []string{"-c", `echo "$HUD_IDENTITY_PATH $WHO" > ` + out + `; sleep 30`},
+		Env: map[string]string{"WHO": "service"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := sv.Start("envy"); err != nil {
+		t.Fatal(err)
+	}
+	var got []byte
+	waitFor(t, "the service to write its environment", func() bool {
+		got, _ = os.ReadFile(out)
+		return bytes.HasSuffix(got, []byte("\n"))
+	})
+	if string(got) != "/state/id service\n" {
+		t.Fatalf("service saw %q, want the sprite's HUD_IDENTITY_PATH and its own WHO", got)
 	}
 }

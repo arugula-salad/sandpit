@@ -115,3 +115,39 @@ func TestReadEventsTracksWhereToResume(t *testing.T) {
 		t.Fatalf("--count 1: done=%v last=%q", done, last)
 	}
 }
+
+// A service that exits after the start the stream watched fails the command,
+// whatever its exit code: it did not stay up for --duration. The exit of the
+// old process a restart stopped comes before the start and does not.
+func TestServiceExitWhileWatchedFails(t *testing.T) {
+	serve(t, 200, "application/x-ndjson", `{"type":"started","data":"pid 7"}`+"\n"+`{"type":"exit","exit_code":0}`+"\n"+`{"type":"complete"}`+"\n")
+	if err := services("create", []string{"web", "--cmd", "x", "--duration", "3s", "--no-stream"}); err == nil || err.Error() != "the service exited with code 0 while it was watched" {
+		t.Errorf("crash inside the window: %v", err)
+	}
+	serve(t, 200, "application/x-ndjson", `{"type":"stopping"}`+"\n"+`{"type":"exit","exit_code":143}`+"\n"+`{"type":"stopped"}`+"\n"+`{"type":"started","data":"pid 8"}`+"\n"+`{"type":"complete"}`+"\n")
+	if err := services("restart", []string{"web"}); err != nil {
+		t.Errorf("restart whose old process exited: %v", err)
+	}
+}
+
+// --no-stream alone returns at once, as upstream's does; with an explicit
+// --duration it waits that long and only stops printing.
+func TestNoStreamKeepsAnExplicitDuration(t *testing.T) {
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"web", "--cmd", "x", "--no-stream"}, "0s"},
+		{[]string{"web", "--cmd", "x", "--duration", "3s", "--no-stream"}, "3s"},
+		{[]string{"web", "--cmd", "x", "--no-stream", "--duration", "2s"}, "2s"},
+		{[]string{"web", "--cmd", "x"}, "5s"},
+	} {
+		got := serve(t, 200, "application/x-ndjson", `{"type":"complete"}`+"\n")
+		if err := services("create", tc.args); err != nil {
+			t.Fatal(err)
+		}
+		if d := got.URL.Query().Get("duration"); d != tc.want {
+			t.Errorf("%v: duration=%s, want %s", tc.args, d, tc.want)
+		}
+	}
+}
