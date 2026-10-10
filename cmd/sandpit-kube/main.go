@@ -83,12 +83,6 @@ func main() {
 		*domain = "e2b.localhost:" + port
 	}
 
-	rules := clientcmd.NewDefaultClientConfigLoadingRules()
-	rules.ExplicitPath = *kubeconfig
-	cfg, err := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(rules, &clientcmd.ConfigOverrides{CurrentContext: *kubeContext}).ClientConfig()
-	if err != nil {
-		fatal("kubeconfig", err)
-	}
 	st, err := store.Open(*dataDir)
 	if err != nil {
 		fatal("store", err)
@@ -104,6 +98,13 @@ func main() {
 	}
 	switch *engineName {
 	case "kube":
+		// Only this engine talks to the Kubernetes API; substrate's reaches ate-api alone.
+		rules := clientcmd.NewDefaultClientConfigLoadingRules()
+		rules.ExplicitPath = *kubeconfig
+		cfg, cerr := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(rules, &clientcmd.ConfigOverrides{CurrentContext: *kubeContext}).ClientConfig()
+		if cerr != nil {
+			fatal("kubeconfig", cerr)
+		}
 		eng, err = kube.New(kube.Options{Namespace: *namespace, Image: *image, ImagePullPolicy: corev1.PullPolicy(*pull),
 			RuntimeClass: *runtimeCls, Dial: *dial, PersistPath: *persist, DiskSize: *diskSize, StorageClass: *storageCls},
 			cfg, st, log)
