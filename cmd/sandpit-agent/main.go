@@ -1,7 +1,9 @@
 // sandpit-agent is the in-guest runtime. As PID 1 it sets up the system and
 // supervises a copy of itself running `serve`, which hosts the agent API on
 // vsock. Splitting the two keeps PID 1's wait4(-1) orphan reaping from
-// stealing exit statuses that os/exec is waiting on in the server.
+// stealing exit statuses that os/exec is waiting on in the server. As a
+// container's entrypoint (`sandpit-agent serve ...` as PID 1, in a Kubernetes
+// pod) it does the same supervising, on TCP, and none of the system setup.
 package main
 
 import (
@@ -33,6 +35,10 @@ func main() {
 	log.SetFlags(0)
 	log.SetPrefix("sandpit-agent: ")
 	if os.Getpid() == 1 {
+		if len(os.Args) > 1 && os.Args[1] == "serve" {
+			runContainerInit() // a container's entrypoint, not a VM's init
+			return
+		}
 		runInit()
 		return
 	}
@@ -52,7 +58,13 @@ func serve(args []string) {
 	stateDir := fs.String("state-dir", "/.sprite", "where service definitions and logs live (on the sprite's disk)")
 	runDir := fs.String("run-dir", "/run/sprite-services", "pid files; must not survive a reboot")
 	systemDir := fs.String("system-services-dir", "/etc/sandpit/services.d", "the image's own daemons, started at boot (vsock only); /etc/wisp/services.d is read when it is absent, for disks built before the rename")
+	system := fs.Bool("system-services", false, "start the image's own daemons on a tcp listener too: the agent is a sandbox's entrypoint (a Kubernetes pod), not a test on the host")
 	fs.Parse(args)
+	*system = *system || *listen == "vsock"
+	// A pod's agent is reachable from the pod network, so it asks every stream
+	// for the token it was started with (agent.TokenListener).
+	token := os.Getenv("SANDPIT_AGENT_TOKEN")
+	os.Unsetenv("SANDPIT_AGENT_TOKEN") // not the sandbox's to read in its sessions' environment
 
 	var ln net.Listener
 	var err error
@@ -69,6 +81,11 @@ func serve(args []string) {
 	if err != nil {
 		log.Fatalf("listen: %v", err)
 	}
+	if token != "" {
+		ln = agent.TokenListener(ln, token)
+	} else if *system && *listen != "vsock" {
+		log.Fatal("SANDPIT_AGENT_TOKEN is required with --system-services on a network listener")
+	}
 
 	// Before the supervisor exists: it starts services, and they must be confined too.
 	boot := cmdline()
@@ -77,9 +94,10 @@ func serve(args []string) {
 		"/run/sprite-policy.json")
 
 	// The image's own daemons (E2B's envd, say), not the user's: they are
-	// started here and are nowhere in the services API. Only in a real guest: on
-	// the host these paths would name the host's files.
-	if *listen == "vsock" {
+	// started here and are nowhere in the services API. Only in a real guest (a
+	// VM, or a pod with --system-services): on the host these paths would name
+	// the host's files.
+	if *system {
 		dir := *systemDir
 		if _, err := os.Stat(dir); os.IsNotExist(err) && dir == "/etc/sandpit/services.d" {
 			dir = "/etc/wisp/services.d" // a disk built by wisp

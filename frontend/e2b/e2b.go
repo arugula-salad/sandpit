@@ -63,7 +63,8 @@ const (
 // Options configures the front end.
 type Options struct {
 	// Disk is the E2B guest image every sandbox's disk is cloned from:
-	// <data>/images/e2b.ext4, which scripts/build-image.sh e2b builds.
+	// <data>/images/e2b.ext4, which scripts/build-image.sh e2b builds. Empty
+	// on an engine whose sandboxes are not made from a disk here.
 	Disk string
 	// Domain is reported as the sandbox's `domain`, so that the SDK's
 	// getHost(port) is <port>-<id>.<Domain>: a host[:port] that reaches this
@@ -130,7 +131,9 @@ func New(opts Options, st *store.Store, life Engine, log *slog.Logger) *Frontend
 		opts.MaxTimeout = 24 * time.Hour
 	}
 	f := &Frontend{opts: opts, store: st, life: life, log: log.With("api", API), acquire: life.Acquire, dialEnvd: machineDialer}
-	if fi, err := os.Stat(opts.Disk); err == nil {
+	if opts.Disk == "" {
+		// An engine that brings its own image (kube.Engine) needs no disk.
+	} else if fi, err := os.Stat(opts.Disk); err == nil {
 		f.diskMB = int(fi.Size() >> 20)
 	} else {
 		f.log.Warn("no E2B guest image: creating an E2B sandbox will fail until it is built (scripts/build-image.sh e2b)", "disk", opts.Disk)
