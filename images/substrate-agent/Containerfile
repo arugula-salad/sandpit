@@ -1,0 +1,21 @@
+# A guest for the substrate engine's agent APIs (sandpitd --backend substrate,
+# --api-template): a sandpit userland (images/base for the Sprites API, images/vercel,
+# images/daytona) with sandpit-agent as the actor's process, on port 2024
+# (substrate.AgentPort). Agent Substrate's router carries only HTTP, so the agent
+# answers each stream's `Upgrade: websocket` first (--upgrade); after the 101 it is the
+# agent's own protocol. The template's golden snapshot is shared by every actor, so the
+# agent starts unclaimed (--claim) and sandpitd claims it with the sandbox's own token on
+# its first resume. --system-services starts the userland's own daemons, as in a VM.
+# Built from images/ (for sandpit-fixperms, which images/substrate shares) with the agent
+# built into images/substrate-agent/sandpit-agent, by .github/workflows/substrate-images.yml,
+# which pins it into k8s/.
+ARG USERLAND
+FROM ${USERLAND}
+# Substrate's rootfs drops ownership and special mode bits (sandpit-fixperms puts
+# them back): record every file that is not root's or has one, as built.
+RUN mkdir -p /etc/sandpit && find / -xdev \( ! -uid 0 -o ! -gid 0 -o -perm /7000 \) \
+      -printf '%U %G %m %p\n' > /etc/sandpit/image-perms
+COPY --chmod=0755 substrate/sandpit-fixperms /usr/local/sbin/sandpit-fixperms
+COPY --chmod=0755 substrate-agent/sandpit-agent /usr/local/sbin/sandpit-agent
+ENTRYPOINT ["/usr/local/sbin/sandpit-fixperms", "/usr/local/sbin/sandpit-agent", "serve", \
+  "--listen", "tcp:0.0.0.0:2024", "--upgrade", "--claim", "--system-services"]

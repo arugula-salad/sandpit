@@ -1,9 +1,11 @@
-# Builds sandpitd (with sandpit-kube) and the E2B guest for the substrate engine, pushes them to
-# ghcr.io/arugula-salad/{sandpit-kube,sandpit-e2b-guest} and pins both digests into k8s/,
+# Builds sandpitd (with sandpit-kube), the E2B guest and the agent guests (Sprites, Vercel,
+# Daytona) for the substrate engine, pushes them to ghcr.io/arugula-salad/{sandpit-kube,
+# sandpit-e2b-guest,sandpit-guest} and, on main, pins every digest into k8s/,
 # which is how Flux (arugula-salad/fleet) rolls home-cloud's in-cluster sandpit onto them.
 # amd64 only: every home-cloud node is.
 #
-# Both packages must be public: Agent Substrate's atelet pulls the guest image with no
+# Pull requests push too (sha- tags), so a PR's images can be tried against the cluster
+# before it merges; only main pins. The packages must be public: Agent Substrate's atelet pulls the guest image with no
 # credentials, and the sandpit namespace has no pull secret.
 name: substrate-images
 
@@ -19,6 +21,10 @@ on:
       - "engine/**"
       - "images/e2b/**"
       - "images/substrate/**"
+      - "images/substrate-agent/**"
+      - "images/base/**"
+      - "images/vercel/**"
+      - "images/daytona/**"
       - "images/sandpit-kube/**"
       - "scripts/build-envd.sh"
       - "go.mod"
@@ -35,6 +41,10 @@ on:
       - "engine/**"
       - "images/e2b/**"
       - "images/substrate/**"
+      - "images/substrate-agent/**"
+      - "images/base/**"
+      - "images/vercel/**"
+      - "images/daytona/**"
       - "images/sandpit-kube/**"
       - "scripts/build-envd.sh"
       - "go.mod"
@@ -48,6 +58,7 @@ concurrency:
 env:
   KUBE_IMAGE: ghcr.io/${{ github.repository_owner }}/sandpit-kube
   GUEST_IMAGE: ghcr.io/${{ github.repository_owner }}/sandpit-e2b-guest
+  AGENT_GUEST_IMAGE: ghcr.io/${{ github.repository_owner }}/sandpit-guest
 
 jobs:
   build:
@@ -60,30 +71,25 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      # The docker driver, so the guest's build sees the userland image the step before loaded.
+      # The docker driver, so each guest's build sees the userland image the step before loaded.
       - uses: docker/setup-buildx-action@v3
         with:
           driver: docker
       - uses: docker/login-action@v3
-        if: github.event_name != 'pull_request'
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build envd
-        run: ./scripts/build-envd.sh
+      - name: Build envd and sandpit-agent
+        run: |
+          ./scripts/build-envd.sh
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -o images/substrate-agent/sandpit-agent ./cmd/sandpit-agent
 
-      # The guest is two builds, as in scripts/build-substrate-image.sh: the E2B userland,
-      # then images/substrate on top of it.
+      # E2B's guest is envd alone: its userland, then images/substrate on top.
       - name: Build the E2B userland
-        uses: docker/build-push-action@v6
-        with:
-          context: images/e2b
-          file: images/e2b/Containerfile
-          platforms: linux/amd64
-          tags: sandpit-e2b:ci
-      - name: Build and push the guest
+        run: docker build -q -t sandpit-e2b:ci -f images/e2b/Containerfile images/e2b
+      - name: Build and push the E2B guest
         id: guest
         uses: docker/build-push-action@v6
         with:
@@ -91,36 +97,88 @@ jobs:
           file: images/substrate/Containerfile
           platforms: linux/amd64
           build-args: USERLAND=sandpit-e2b:ci
-          push: ${{ github.event_name != 'pull_request' }}
-          tags: |
-            ${{ env.GUEST_IMAGE }}:sha-${{ github.sha }}
+          push: true
+          tags: ${{ env.GUEST_IMAGE }}:sha-${{ github.sha }}
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
 
-      - name: Build and push sandpit-kube
+      # The agent guests: each API's userland with sandpit-agent (images/substrate-agent).
+      - name: Build the agent APIs' userlands
+        run: |
+          docker build -q -t sandpit-base:ci -f images/base/Containerfile images/base
+          docker build -q -t sandpit-vercel:ci -f images/vercel/Containerfile images/vercel
+          docker build -q -t sandpit-daytona:ci -f images/daytona/Containerfile images/daytona
+      - name: Build and push the Sprites guest
+        id: sprites
+        uses: docker/build-push-action@v6
+        with:
+          context: images
+          file: images/substrate-agent/Containerfile
+          platforms: linux/amd64
+          build-args: USERLAND=sandpit-base:ci
+          push: true
+          tags: ${{ env.AGENT_GUEST_IMAGE }}:sprites-sha-${{ github.sha }}
+          labels: org.opencontainers.image.source=https://github.com/${{ github.repository }}
+      - name: Build and push the Vercel guest
+        id: vercel
+        uses: docker/build-push-action@v6
+        with:
+          context: images
+          file: images/substrate-agent/Containerfile
+          platforms: linux/amd64
+          build-args: USERLAND=sandpit-vercel:ci
+          push: true
+          tags: ${{ env.AGENT_GUEST_IMAGE }}:vercel-sha-${{ github.sha }}
+          labels: org.opencontainers.image.source=https://github.com/${{ github.repository }}
+      - name: Build and push the Daytona guest
+        id: daytona
+        uses: docker/build-push-action@v6
+        with:
+          context: images
+          file: images/substrate-agent/Containerfile
+          platforms: linux/amd64
+          build-args: USERLAND=sandpit-daytona:ci
+          push: true
+          tags: ${{ env.AGENT_GUEST_IMAGE }}:daytona-sha-${{ github.sha }}
+          labels: org.opencontainers.image.source=https://github.com/${{ github.repository }}
+
+      - name: Build and push sandpit-kube (sandpitd)
         id: kube
         uses: docker/build-push-action@v6
         with:
           context: .
           file: images/sandpit-kube/Containerfile
           platforms: linux/amd64
-          push: ${{ github.event_name != 'pull_request' }}
-          tags: |
-            ${{ env.KUBE_IMAGE }}:sha-${{ github.sha }}
+          push: true
+          tags: ${{ env.KUBE_IMAGE }}:sha-${{ github.sha }}
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
+
+      - name: Digests
+        run: |
+          echo "sandpit-kube      ${{ steps.kube.outputs.digest }}"
+          echo "e2b guest         ${{ steps.guest.outputs.digest }}"
+          echo "sprites guest     ${{ steps.sprites.outputs.digest }}"
+          echo "vercel guest      ${{ steps.vercel.outputs.digest }}"
+          echo "daytona guest     ${{ steps.daytona.outputs.digest }}"
 
       # The commit touches only k8s/, outside `paths`, so it doesn't trigger another build.
       - name: Pin the images
         if: github.event_name != 'pull_request'
         env:
-          GUEST_DIGEST: ${{ steps.guest.outputs.digest }}
           KUBE_DIGEST: ${{ steps.kube.outputs.digest }}
+          GUEST_DIGEST: ${{ steps.guest.outputs.digest }}
+          SPRITES_DIGEST: ${{ steps.sprites.outputs.digest }}
+          VERCEL_DIGEST: ${{ steps.vercel.outputs.digest }}
+          DAYTONA_DIGEST: ${{ steps.daytona.outputs.digest }}
         run: |
           sed -i -E "s#^(    digest: ).*#\1${KUBE_DIGEST}#" k8s/kustomization.yaml
           sed -i -E "s#(image: ${GUEST_IMAGE})@sha256:[0-9a-f]+#\1@${GUEST_DIGEST}#" k8s/actortemplate.yaml
+          sed -i -E "s#(image: ${AGENT_GUEST_IMAGE})@sha256:[0-9a-f]+#\1@${SPRITES_DIGEST}#" k8s/templates/sprites.yaml
+          sed -i -E "s#(image: ${AGENT_GUEST_IMAGE})@sha256:[0-9a-f]+#\1@${VERCEL_DIGEST}#" k8s/templates/vercel.yaml
+          sed -i -E "s#(image: ${AGENT_GUEST_IMAGE})@sha256:[0-9a-f]+#\1@${DAYTONA_DIGEST}#" k8s/templates/daytona.yaml
           git diff --quiet && { echo "already pinned"; exit 0; }
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
