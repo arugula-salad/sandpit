@@ -355,16 +355,22 @@ func (s *Server) status(ctx context.Context, started time.Time, listen string) S
 	l := s.life
 	vmRoot := filepath.Join(s.opts.DataDir, "vm")
 	out := Status{Daemon: &DaemonStatus{Pid: os.Getpid(), StartedAt: started, Listen: listen},
-		Host: HostStatus{DataDir: s.opts.DataDir, Reflink: l.Reflink(), DiskReserve: s.opts.DiskReserve,
-			Networking: l.Networking(), Bridge: netd.Pool(s.opts.NetPool).Bridge(), PolicyHelper: l.PolicyHelper(),
+		Host: HostStatus{DataDir: s.opts.DataDir, DiskReserve: s.opts.DiskReserve,
 			MaxRunning: s.opts.MaxRunning, MaxSprites: s.opts.MaxSprites,
 			MaxRunningMemoryMiB: s.opts.MaxRunningMemoryMiB, MaxConcurrentBoots: s.opts.MaxConcurrentBoots},
 		Sprites: []SpriteStatus{}}
-	out.Host.ReservedMemoryMiB, out.Host.BootsInFlight = l.AdmissionUsage()
-	out.Host.Volume, _ = l.Volume()
-	out.Host.Images = imageCacheStatus(vmRoot)
-	out.Host.TapsTotal, out.Host.TapsUsed = l.TapUsage()
-	out.Host.Cgroup = s.opts.Host.Confine.Subtree()
+	// The host's side of it (disks, taps, cgroups, VMM processes) exists only
+	// on the Firecracker engine; another backend's sandboxes run elsewhere.
+	fc, _ := l.(*engine.Engine)
+	if fc != nil {
+		out.Host.Reflink, out.Host.Networking, out.Host.PolicyHelper = fc.Reflink(), fc.Networking(), fc.PolicyHelper()
+		out.Host.Bridge = netd.Pool(s.opts.NetPool).Bridge()
+		out.Host.ReservedMemoryMiB, out.Host.BootsInFlight = fc.AdmissionUsage()
+		out.Host.Volume, _ = fc.Volume()
+		out.Host.Images = imageCacheStatus(vmRoot)
+		out.Host.TapsTotal, out.Host.TapsUsed = fc.TapUsage()
+		out.Host.Cgroup = s.opts.Host.Confine.Subtree()
+	}
 
 	var wg sync.WaitGroup
 	sprites := s.store.All()
@@ -372,9 +378,11 @@ func (s *Server) status(ctx context.Context, started time.Time, listen string) S
 	for i, sp := range sprites {
 		st := spriteBase(sp)
 		st.State = l.Status(sp.Record)
-		st.PolicyRestricted = l.PolicyRestricted(sp.Record)
-		if ip := l.SandboxIP(sp.Record); ip != nil {
-			st.IP = ip.String()
+		if fc != nil {
+			st.PolicyRestricted = fc.PolicyRestricted(sp.Record)
+			if ip := fc.SandboxIP(sp.Record); ip != nil {
+				st.IP = ip.String()
+			}
 		}
 		vm := l.Peek(sp.ID)
 		st.APIInflight = vm.Inflight
@@ -398,8 +406,10 @@ func (s *Server) status(ctx context.Context, started time.Time, listen string) S
 		}
 	}
 	wg.Wait()
-	diskUsage(s.store, vmRoot, out.Sprites)
-	out.Orphans, out.OtherDaemons = scanProcs(vmRoot, os.Getpid())
+	if fc != nil {
+		diskUsage(s.store, vmRoot, out.Sprites)
+		out.Orphans, out.OtherDaemons = scanProcs(vmRoot, os.Getpid())
+	}
 	return out
 }
 

@@ -23,6 +23,9 @@ func (s *Server) imageSource(ctx context.Context, raw string, parent bool) (disk
 	if err != nil {
 		return "", img, ref, nil, &createError{http.StatusBadRequest, "bad_request", "from.image: " + err.Error()}
 	}
+	if s.images == nil {
+		return "", img, ref, nil, &createError{http.StatusNotImplemented, "not_supported", "from.image: " + engine.ErrUnsupported.Error()}
+	}
 	disk, img, release, err = s.images.Acquire(ctx, ref, !parent)
 	switch {
 	case err == nil:
@@ -42,6 +45,15 @@ func (s *Server) imageSource(ctx context.Context, raw string, parent bool) (disk
 // Operator socket routes (status.go mounts them): the cache is managed by
 // whoever owns the data directory, never through the API token.
 func (s *Server) registerImageOps(mux *http.ServeMux) {
+	if s.images == nil { // a backend without an image cache
+		mux.HandleFunc("/images", func(w http.ResponseWriter, r *http.Request) {
+			writeErr(w, http.StatusNotImplemented, "not_supported", "images: "+engine.ErrUnsupported.Error())
+		})
+		mux.HandleFunc("/images/", func(w http.ResponseWriter, r *http.Request) {
+			writeErr(w, http.StatusNotImplemented, "not_supported", "images: "+engine.ErrUnsupported.Error())
+		})
+		return
+	}
 	mux.HandleFunc("GET /images", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, s.images.List())
 	})

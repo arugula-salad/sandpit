@@ -29,6 +29,7 @@ import (
 	"github.com/arugula-salad/sandpit/internal/confine"
 	"github.com/arugula-salad/sandpit/internal/server"
 	"github.com/arugula-salad/sandpit/internal/store"
+	"github.com/arugula-salad/sandpit/substrate"
 )
 
 // DefaultDataDir is --data's default: $SANDPIT_DATA, else sandpit under the XDG
@@ -79,7 +80,7 @@ type Env struct {
 	DataDir string
 	Options server.Options
 	Store   *store.Store
-	Engine  *engine.Engine
+	Engine  engine.Backend
 	Sprites *server.Server
 	Log     *slog.Logger
 }
@@ -103,24 +104,12 @@ func Run(name string, opts server.Options, f *Flags, extra ...Frontend) {
 			idLen = max(idLen, fe.IDLen)
 		}
 	}
-	if n := len(filepath.Join(abs, "vm", strings.Repeat("0", idLen), "fc.sock")); n > 100 {
+	if n := len(filepath.Join(abs, "vm", strings.Repeat("0", idLen), "fc.sock")); f.backend == "firecracker" && n > 100 {
 		fatal(log, fmt.Errorf("data directory path is too long for unix sockets (%d bytes): %s", n, abs))
 	}
 	opts.DataDir, opts.BaseImage = abs, filepath.Join(abs, "images", "base.ext4")
-	opts.Host.Firecracker = filepath.Join(abs, "bin", "firecracker")
-	opts.Host.Kernel = filepath.Join(abs, "kernel", "vmlinux")
-	opts.Host.Initrd = filepath.Join(abs, "initrd.cpio")
-	for what, p := range map[string]string{"firecracker (scripts/fetch-deps.sh)": opts.Host.Firecracker,
-		"guest kernel (scripts/fetch-deps.sh)": opts.Host.Kernel, "initrd (scripts/build-initrd.sh)": opts.Host.Initrd,
-		"base image (scripts/build-image.sh)": opts.BaseImage} {
-		if _, err := os.Stat(p); err != nil {
-			fatal(log, fmt.Errorf("missing %s: %s", what, p))
-		}
-	}
-	if f, err := os.OpenFile("/dev/kvm", os.O_RDWR, 0); err != nil {
-		fatal(log, fmt.Errorf("need read/write access to /dev/kvm: %w", err))
-	} else {
-		f.Close()
+	if f.backend == "firecracker" {
+		checkFirecrackerHost(log, abs, &opts)
 	}
 
 	// First, because it doubles as the lock on the data directory.
@@ -130,18 +119,20 @@ func Run(name string, opts server.Options, f *Flags, extra ...Frontend) {
 	}
 	defer statusLn.Close() // which also removes the socket
 
-	mode, err := confine.ParseMode(f.confineMode)
-	if err != nil {
-		fatal(log, err)
+	if f.backend == "firecracker" {
+		mode, err := confine.ParseMode(f.confineMode)
+		if err != nil {
+			fatal(log, err)
+		}
+		// One cgroup subtree per data directory, so a second sandpitd (dev, tests)
+		// on the same host does not sweep away the first one's VM cgroups.
+		conf, err := confine.Open(mode, "wisp-"+cgroupTag(abs), f.cgroupCaps, log)
+		if err != nil {
+			fatal(log, err)
+		}
+		opts.Host.Confine = conf
+		log.Info("vmm confinement", "detail", conf.Describe())
 	}
-	// One cgroup subtree per data directory, so a second sandpitd (dev, tests)
-	// on the same host does not sweep away the first one's VM cgroups.
-	conf, err := confine.Open(mode, "wisp-"+cgroupTag(abs), f.cgroupCaps, log)
-	if err != nil {
-		fatal(log, err)
-	}
-	opts.Host.Confine = conf
-	log.Info("vmm confinement", "detail", conf.Describe())
 
 	token, err := loadToken(filepath.Join(abs, "token"))
 	if err != nil {
@@ -165,7 +156,18 @@ func Run(name string, opts server.Options, f *Flags, extra ...Frontend) {
 			opts.Webhooks.Types = strings.Split(f.webhookTypes, ",")
 		}
 	}
-	life := engine.New(opts.Options, st, log)
+	var life engine.Backend
+	switch f.backend {
+	case "substrate":
+		eng, err := substrate.New(f.ate, st, log)
+		if err != nil {
+			fatal(log, err)
+		}
+		life = eng
+		log.Info("sandboxes run on Agent Substrate", "ate_api", f.ate.API, "atespace", f.ate.Atespace)
+	default:
+		life = engine.New(opts.Options, st, log)
+	}
 
 	urlDomains, err := parseURLDomains(f.urlDomain)
 	if err != nil {
@@ -387,4 +389,25 @@ func cgroupTag(dataDir string) string {
 func fatal(log *slog.Logger, err error) {
 	log.Error(err.Error())
 	os.Exit(1)
+}
+
+// checkFirecrackerHost fills in and checks what the Firecracker engine needs
+// on this host: its binary, the guest kernel and initrd, the base image and
+// /dev/kvm.
+func checkFirecrackerHost(log *slog.Logger, abs string, opts *server.Options) {
+	opts.Host.Firecracker = filepath.Join(abs, "bin", "firecracker")
+	opts.Host.Kernel = filepath.Join(abs, "kernel", "vmlinux")
+	opts.Host.Initrd = filepath.Join(abs, "initrd.cpio")
+	for what, p := range map[string]string{"firecracker (scripts/fetch-deps.sh)": opts.Host.Firecracker,
+		"guest kernel (scripts/fetch-deps.sh)": opts.Host.Kernel, "initrd (scripts/build-initrd.sh)": opts.Host.Initrd,
+		"base image (scripts/build-image.sh)": opts.BaseImage} {
+		if _, err := os.Stat(p); err != nil {
+			fatal(log, fmt.Errorf("missing %s: %s", what, p))
+		}
+	}
+	if f, err := os.OpenFile("/dev/kvm", os.O_RDWR, 0); err != nil {
+		fatal(log, fmt.Errorf("need read/write access to /dev/kvm: %w", err))
+	} else {
+		f.Close()
+	}
 }

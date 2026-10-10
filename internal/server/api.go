@@ -78,7 +78,7 @@ type Options struct {
 type Server struct {
 	opts   Options
 	store  *store.Store
-	life   *engine.Engine
+	life   engine.Backend
 	log    *slog.Logger
 	token  string
 	org    string
@@ -103,7 +103,7 @@ type Server struct {
 }
 
 // New serves the API over st and life. token is the root bearer token.
-func New(opts Options, st *store.Store, life *engine.Engine, log *slog.Logger, token string) *Server {
+func New(opts Options, st *store.Store, life engine.Backend, log *slog.Logger, token string) *Server {
 	s := &Server{opts: opts, store: st, life: life, log: log, token: token, org: opts.Org,
 		urlDomains: opts.URLDomains, urlFmt: opts.URLFormat, started: time.Now()}
 	life.SetGuestAPI(s.guestAPI)

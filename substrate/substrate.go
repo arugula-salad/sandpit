@@ -87,6 +87,11 @@ type Engine struct {
 	running map[string]*guest // resumed by us, boot hooks run
 	onBoot  []engine.BootHook
 	quit    chan struct{}
+
+	events    *engine.Bus
+	onDelete  []func(store.Sprite)
+	describer engine.Describer
+	quitting  bool
 }
 
 // New connects to ate-api.
@@ -108,7 +113,8 @@ func New(opts Options, st *store.Store, log *slog.Logger) (*Engine, error) {
 		return nil, err
 	}
 	e := &Engine{opts: opts, store: st, log: log.With("engine", "substrate"), api: ateapipb.NewControlClient(conn), conn: conn,
-		locks: map[string]*sync.Mutex{}, running: map[string]*guest{}, quit: make(chan struct{})}
+		locks: map[string]*sync.Mutex{}, running: map[string]*guest{}, quit: make(chan struct{}),
+		events: engine.NewBus()}
 	if opts.TemplateFile != "" {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 		name, err := EnsureTemplate(ctx, e.api, opts.Atespace, opts.Template, opts.TemplateFile)
@@ -132,6 +138,9 @@ func New(opts Options, st *store.Store, log *slog.Logger) (*Engine, error) {
 
 // Shutdown stops the janitor and closes the API connection. Actors carry on.
 func (e *Engine) Shutdown() {
+	e.mu.Lock()
+	e.quitting = true
+	e.mu.Unlock()
 	close(e.quit)
 	e.conn.Close()
 }
@@ -205,7 +214,8 @@ func (e *Engine) Create(ctx context.Context, spec engine.CreateSpec) (store.Spri
 // Delete deletes the actor, in whatever state, and its snapshot, and the record.
 func (e *Engine) Delete(rec store.Record) error {
 	defer e.lock(rec.ID)()
-	if _, err := e.store.GetRecord(rec.ID); err != nil {
+	sp, err := e.store.Get(rec.ID)
+	if err != nil {
 		return err
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
@@ -220,6 +230,12 @@ func (e *Engine) Delete(rec store.Record) error {
 		return err
 	}
 	e.log.Info("sandbox deleted", "id", rec.ID)
+	e.mu.Lock()
+	hooks := e.onDelete
+	e.mu.Unlock()
+	for _, f := range hooks {
+		f(sp)
+	}
 	return nil
 }
 
