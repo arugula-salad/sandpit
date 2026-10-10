@@ -26,4 +26,4 @@ configMapGenerator:
 images:
   - name: sandpit-kube
     newName: ghcr.io/arugula-salad/sandpit-kube
-    digest: sha256:02041566b28b0223f142789fa489d0ec17d9601a22d8e7a243cd8f2d5bb93f1d
+    digest: sha256:6680ceddf9fa715540c72121bcca4293c9b7dfb2993ac23f32a06de4850892d5
