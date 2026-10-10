@@ -7,7 +7,7 @@ workerSelector:
     workload: sandpit-e2b
 containers:
 - name: envd
-  image: ghcr.io/arugula-salad/sandpit-e2b-guest@sha256:48c04bbb241eaecb5c40eadedad558aa3e23d94d71809c409e3a388b0c93ce60
+  image: ghcr.io/arugula-salad/sandpit-e2b-guest@sha256:5f8c925e5f7eb179688f0a3e3adb2a7de68f2a45a125ce3ccd51fd0ad6126ed5
   securityContext:
     capabilities:
       add: [CHOWN, DAC_OVERRIDE, FOWNER, FSETID, SETUID, SETGID, SETPCAP, SETFCAP, SYS_CHROOT, MKNOD]
