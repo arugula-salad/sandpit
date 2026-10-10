@@ -64,7 +64,9 @@ func main() {
 		ateToken    = flag.String("ate-token", "", "substrate: file holding a bearer token ate-api accepts")
 		ateRouter   = flag.String("ate-router", "127.0.0.1:8081", "substrate: atenet-router's CONNECT listener")
 		atespace    = flag.String("atespace", "sandpit", "substrate: atespace the actors are made in")
-		ateTemplate = flag.String("template", "e2b", "substrate: the ActorTemplate actors are made from (images/substrate)")
+		ateTemplate = flag.String("template", "e2b", "substrate: the ActorTemplate actors are made from (images/substrate); with --template-file, the base of its name")
+		ateTmplFile = flag.String("template-file", "", "substrate: an ActorTemplate (YAML) to make at startup, with the atespace, as <template>-<hash of the file>")
+		ateServer   = flag.String("ate-api-server-name", "api.ate-system.svc", "substrate: the name ate-api's certificate is for")
 		idleSuspend = flag.Duration("idle-suspend", 0, "substrate: suspend a sandbox idle this long, warm; the next request resumes it (0: never)")
 	)
 	flag.Parse()
@@ -106,8 +108,8 @@ func main() {
 			RuntimeClass: *runtimeCls, Dial: *dial, PersistPath: *persist, DiskSize: *diskSize, StorageClass: *storageCls},
 			cfg, st, log)
 	case "substrate":
-		eng, err = substrate.New(substrate.Options{API: *ateAPI, CAFile: *ateCA, TokenFile: *ateToken, Router: *ateRouter,
-			Atespace: *atespace, Template: *ateTemplate, IdleSuspend: *idleSuspend}, st, log)
+		eng, err = substrate.New(substrate.Options{API: *ateAPI, APIServerName: *ateServer, CAFile: *ateCA, TokenFile: *ateToken,
+			Router: *ateRouter, Atespace: *atespace, Template: *ateTemplate, TemplateFile: *ateTmplFile, IdleSuspend: *idleSuspend}, st, log)
 	default:
 		err = fmt.Errorf("unknown --engine %q", *engineName)
 	}

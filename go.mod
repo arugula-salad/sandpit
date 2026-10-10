@@ -3,7 +3,7 @@ module github.com/arugula-salad/sandpit
 go 1.27.1
 
 require (
-	github.com/agent-substrate/substrate v0.4.1-0.20261010050022-f20063021e17
+	github.com/agent-substrate/substrate v0.4.0
 	github.com/creack/pty v1.1.24
 	github.com/fsnotify/fsnotify v1.10.1
 	github.com/gorilla/websocket v1.5.4-0.20250319132907-e064f32e3674

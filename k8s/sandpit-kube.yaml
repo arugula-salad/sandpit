@@ -1,0 +1,125 @@
+# sandpit-kube with --engine substrate, talking to Substrate inside the cluster: ate-api at
+# api.ate-system.svc with a projected token for its audience (re-read on every call, so
+# rotation is free) and the service-DNS signer's CA from its ClusterTrustBundle, and the
+# router's CONNECT listener directly. One replica: records are in a local store (/data) until
+# phase 4.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: sandpit-kube
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: sandpit-kube-data
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: longhorn
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sandpit-kube
+  annotations:
+    secrets.infisical.com/auto-reload: "true"
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: sandpit-kube
+  template:
+    metadata:
+      labels:
+        app: sandpit-kube
+    spec:
+      serviceAccountName: sandpit-kube
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: sandpit-kube
+          image: sandpit-kube
+          args:
+            - --engine=substrate
+            - --e2b-listen=0.0.0.0:7901
+            - --e2b-domain=e2b.substrate.inevitable.fyi
+            - --data-dir=/data
+            - --ate-api=api.ate-system.svc:443
+            - --ate-ca=/run/ate/ca.pem
+            - --ate-token=/run/ate/token
+            - --ate-router=atenet-router.ate-system.svc:8081
+            - --atespace=sandpit
+            - --template=e2b
+            - --template-file=/etc/sandpit/actortemplate.yaml
+          env:
+            - name: SANDPIT_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: sandpit-token
+                  key: SANDPIT_TOKEN
+          ports:
+            - name: e2b
+              containerPort: 7901
+          # The first start waits for the template's golden snapshot (EnsureTemplate) before
+          # it listens.
+          startupProbe:
+            tcpSocket:
+              port: e2b
+            periodSeconds: 5
+            failureThreshold: 120
+          readinessProbe:
+            tcpSocket:
+              port: e2b
+            periodSeconds: 10
+          resources:
+            requests: {cpu: 50m, memory: 64Mi}
+            limits: {memory: 256Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - {name: data, mountPath: /data}
+            - {name: ate, mountPath: /run/ate, readOnly: true}
+            - {name: template, mountPath: /etc/sandpit, readOnly: true}
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: sandpit-kube-data
+        - name: template
+          configMap:
+            name: sandpit-actortemplate
+        - name: ate
+          projected:
+            sources:
+              - serviceAccountToken:
+                  audience: api.ate-system.svc
+                  expirationSeconds: 3600
+                  path: token
+              - clusterTrustBundle:
+                  signerName: servicedns.podcert.ate.dev/identity
+                  labelSelector:
+                    matchLabels:
+                      podcert.ate.dev/canarying: live
+                  path: ca.pem
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sandpit-kube
+spec:
+  selector:
+    app: sandpit-kube
+  ports:
+    - name: e2b
+      port: 7901
+      targetPort: e2b

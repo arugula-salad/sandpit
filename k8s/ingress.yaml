@@ -1,0 +1,32 @@
+# Public, gated only by sandpit's API key, like wisp's e2b.sandbox.inevitable.fyi: the API
+# under api.e2b.substrate.inevitable.fyi (E2B's SDK prefixes the domain) and each sandbox port
+# at <port>-<id>.e2b.substrate.inevitable.fyi. home-cloud's *.inevitable.fyi record already
+# points here; the certificate is DNS-01.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: sandpit-e2b-tls
+spec:
+  secretName: sandpit-e2b-tls
+  issuerRef:
+    name: letsencrypt-production
+    kind: ClusterIssuer
+  dnsNames:
+    - e2b.substrate.inevitable.fyi
+    - "*.e2b.substrate.inevitable.fyi"
+---
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: sandpit-e2b
+spec:
+  entryPoints:
+    - websecure
+  routes:
+    - match: Host(`e2b.substrate.inevitable.fyi`) || HostRegexp(`^[a-z0-9-]+\.e2b\.substrate\.inevitable\.fyi$`)
+      kind: Rule
+      services:
+        - name: sandpit-kube
+          port: 7901
+  tls:
+    secretName: sandpit-e2b-tls

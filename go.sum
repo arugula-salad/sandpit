@@ -1,5 +1,7 @@
 github.com/Masterminds/semver/v3 v3.5.0 h1:kQceYJfbupGfZOKZQg0kou0DgAKhzDg2NZPAwZ/2OOE=
 github.com/Masterminds/semver/v3 v3.5.0/go.mod h1:4V+yj/TJE1HU9XfppCwVMZq3I84lprf4nC11bSS5beM=
+github.com/agent-substrate/substrate v0.4.0 h1:6TqMYb2ucahCcuPF5DfKaOmTRSoyEeHbfDkY+lLaLu4=
+github.com/agent-substrate/substrate v0.4.0/go.mod h1:ZYKQt3ZSTroeduZXmjEVsF2vjGyZryWDUQTH7hIvgIU=
 github.com/agent-substrate/substrate v0.4.1-0.20261010050022-f20063021e17 h1:Zbnkynb32790XvcdpwEBPFmc9Cvl9mpFsd7cgPk9rW0=
 github.com/agent-substrate/substrate v0.4.1-0.20261010050022-f20063021e17/go.mod h1:ORdC3O+PHIAD8NpGtLBlLsQcsUi5HyxSu8npWC6Kx1M=
 github.com/armon/go-socks5 v0.0.0-20160902184237-e75332964ef5 h1:0CwZNZbxp69SHPdPJAN/hZIm0C4OItdklCFmMRWYpio=

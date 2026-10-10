@@ -63,6 +63,10 @@ type Options struct {
 	// Atespace and Template are where actors are made and what from: an
 	// ActorTemplate running the guest image (images/substrate).
 	Atespace, Template string
+	// TemplateFile, if set, is an ActorTemplate (YAML) the engine makes
+	// itself at startup, with the atespace, as Template-<hash of the file>
+	// (EnsureTemplate), and waits for its golden snapshot.
+	TemplateFile string
 	// IdleSuspend suspends a sandbox nothing has used for this long; the next
 	// request resumes it. 0 never does. A suspended sandbox's background
 	// processes stop with it, which is why E2B's sandboxes are never idled
@@ -105,6 +109,17 @@ func New(opts Options, st *store.Store, log *slog.Logger) (*Engine, error) {
 	}
 	e := &Engine{opts: opts, store: st, log: log.With("engine", "substrate"), api: ateapipb.NewControlClient(conn), conn: conn,
 		locks: map[string]*sync.Mutex{}, running: map[string]*guest{}, quit: make(chan struct{})}
+	if opts.TemplateFile != "" {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+		name, err := EnsureTemplate(ctx, e.api, opts.Atespace, opts.Template, opts.TemplateFile)
+		cancel()
+		if err != nil {
+			conn.Close()
+			return nil, fmt.Errorf("substrate: %w", err)
+		}
+		e.opts.Template = name
+		e.log.Info("actor template ready", "atespace", opts.Atespace, "template", name)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	if _, err := e.api.ListActors(ctx, &ateapipb.ListActorsRequest{Atespace: opts.Atespace}); err != nil {

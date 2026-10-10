@@ -1,0 +1,28 @@
+# The E2B API key (SANDPIT_TOKEN) from home-cloud's Infisical, project sandpit-substrate.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: sandpit-infisical
+---
+apiVersion: secrets.infisical.com/v1alpha1
+kind: InfisicalSecret
+metadata:
+  name: sandpit-token
+spec:
+  hostAPI: http://infisical.infisical.svc.cluster.local:8080
+  resyncInterval: 60
+  authentication:
+    kubernetesAuth:
+      identityId: 8854a94b-df10-4c61-b005-97071d849ae9
+      autoCreateServiceAccountToken: true
+      serviceAccountRef:
+        name: sandpit-infisical
+        namespace: sandpit
+      secretsScope:
+        projectSlug: sandpit-substrate-rn-sl
+        envSlug: prod
+        secretsPath: /
+  managedSecretReference:
+    secretName: sandpit-token
+    secretNamespace: sandpit
+    creationPolicy: Orphan
