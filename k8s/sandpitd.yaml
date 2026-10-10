@@ -78,6 +78,8 @@ spec:
             - --backend=substrate
             - --data=/data
             - --listen=0.0.0.0:7900
+            # The Sprites API at sprites.substrate.inevitable.fyi, and each sprite's URL under it.
+            - --sprites-public-url=https://sprites.substrate.inevitable.fyi
             - --e2b-listen=0.0.0.0:7901
             - --e2b-public-url=https://e2b.substrate.inevitable.fyi
             - --vercel-listen=0.0.0.0:7902

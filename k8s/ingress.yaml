@@ -1,5 +1,6 @@
 # Public, gated only by sandpitd's keys, like wisp's *.sandbox.inevitable.fyi: each API at
-# <api>.substrate.inevitable.fyi and its sandbox hosts under it (E2B's <port>-<id>.e2b.,
+# <api>.substrate.inevitable.fyi and its sandbox hosts under it (sprite URLs <name>.sprites.,
+# E2B's <port>-<id>.e2b.,
 # Vercel's <subdomain>.vercel. routes, Daytona's <port>-<id>.daytona. previews). home-cloud's *.inevitable.fyi record already
 # points here; the certificate is DNS-01.
 apiVersion: cert-manager.io/v1
@@ -88,3 +89,32 @@ spec:
           port: 7903
   tls:
     secretName: sandpit-daytona-tls
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: sandpit-sprites-tls
+spec:
+  secretName: sandpit-sprites-tls
+  issuerRef:
+    name: letsencrypt-production
+    kind: ClusterIssuer
+  dnsNames:
+    - sprites.substrate.inevitable.fyi
+    - "*.sprites.substrate.inevitable.fyi"
+---
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: sandpit-sprites
+spec:
+  entryPoints:
+    - websecure
+  routes:
+    - match: Host(`sprites.substrate.inevitable.fyi`) || HostRegexp(`^[a-z0-9-]+\.sprites\.substrate\.inevitable\.fyi$`)
+      kind: Rule
+      services:
+        - name: sandpitd
+          port: 7900
+  tls:
+    secretName: sandpit-sprites-tls
