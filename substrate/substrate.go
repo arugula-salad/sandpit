@@ -561,11 +561,17 @@ func (g *guest) agentStream(ctx context.Context) (net.Conn, error) {
 	return uc, nil
 }
 
-// DialPort opens a tunnel to a user's port on the actor (dialPort), never to
-// the agent's.
+// DialPort opens a stream to a user's port on the actor. With an agent in the
+// guest it goes through the agent (engine.AgentDialPort), as on Firecracker:
+// any TCP, and "http" for the sprite's own HTTP service, which the agent starts
+// on demand. Without one (E2B's guest) it is a tunnel through the router
+// (dialPort), which carries HTTP only. Never to the agent's own port.
 func (g *guest) DialPort(ctx context.Context, port string) (net.Conn, error) {
-	if g.agentToken != "" && port == AgentPort {
-		return nil, fmt.Errorf("substrate: port %s is sandpit-agent's", port)
+	if g.agentToken != "" {
+		if port == AgentPort {
+			return nil, fmt.Errorf("substrate: port %s is sandpit-agent's", port)
+		}
+		return engine.AgentDialPort(ctx, g, port)
 	}
 	return g.dialPort(ctx, port)
 }
