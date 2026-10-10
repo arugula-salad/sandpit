@@ -20,6 +20,9 @@ configMapGenerator:
   - name: sandpit-actortemplate
     files:
       - actortemplate.yaml
+      - templates/sprites.yaml
+      - templates/vercel.yaml
+      - templates/daytona.yaml
 images:
   - name: sandpit-kube
     newName: ghcr.io/arugula-salad/sandpit-kube

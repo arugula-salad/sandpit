@@ -7,6 +7,7 @@ import (
 	"log"
 	"net"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -31,9 +32,23 @@ func TokenListener(ln net.Listener, token string) net.Listener {
 	return tl
 }
 
+// ClaimListener is a TokenListener with no token yet: the first stream that
+// opens with "CLAIM <token>\n" sets it, and from then on it is a
+// TokenListener's. A sandbox on Agent Substrate is restored from a template's
+// snapshot, which can't carry a secret of each sandbox's own, so its agent
+// starts unclaimed and sandpitd claims it on the sandbox's first resume, as
+// it hands E2B's envd its token then (substrate.Engine).
+func ClaimListener(ln net.Listener) net.Listener {
+	tl := &tokenListener{Listener: ln, claim: true, conns: make(chan net.Conn), done: make(chan struct{})}
+	go tl.run()
+	return tl
+}
+
 type tokenListener struct {
 	net.Listener
+	mu    sync.Mutex
 	token []byte
+	claim bool // the token may still be set by a CLAIM
 	conns chan net.Conn
 	done  chan struct{}
 	err   error // the inner Accept's, once done is closed
@@ -70,9 +85,18 @@ func (l *tokenListener) check(c net.Conn) error {
 	if err != nil {
 		return err
 	}
-	got, ok := strings.CutPrefix(line, "AUTH ")
-	if !ok || subtle.ConstantTimeCompare([]byte(got), l.token) != 1 {
-		return errors.New("bad token")
+	l.mu.Lock()
+	if got, ok := strings.CutPrefix(line, "CLAIM "); ok && l.claim && len(l.token) == 0 && got != "" {
+		l.token = []byte(got)
+		l.mu.Unlock()
+		log.Printf("agent claimed")
+	} else {
+		token := l.token
+		l.mu.Unlock()
+		got, ok := strings.CutPrefix(line, "AUTH ")
+		if !ok || len(token) == 0 || subtle.ConstantTimeCompare([]byte(got), token) != 1 {
+			return errors.New("bad token")
+		}
 	}
 	if _, err := c.Write([]byte("OK\n")); err != nil {
 		return err
@@ -101,6 +125,22 @@ func Handshake(c net.Conn, token string) error {
 	}
 	if line != "OK" {
 		return fmt.Errorf("agent handshake: %q", line)
+	}
+	return nil
+}
+
+// Claim is the client's half of claiming an unclaimed agent (ClaimListener)
+// with token; Handshake with the same token opens every later stream.
+func Claim(c net.Conn, token string) error {
+	if _, err := fmt.Fprintf(c, "CLAIM %s\n", token); err != nil {
+		return err
+	}
+	line, err := readLine(c)
+	if err != nil {
+		return fmt.Errorf("agent claim: %w", err)
+	}
+	if line != "OK" {
+		return fmt.Errorf("agent claim: %q", line)
 	}
 	return nil
 }

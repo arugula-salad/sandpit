@@ -22,8 +22,10 @@ package substrate
 import (
 	"bufio"
 	"context"
+	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -43,6 +45,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/arugula-salad/sandpit/engine"
+	"github.com/arugula-salad/sandpit/internal/agent"
 	"github.com/arugula-salad/sandpit/internal/store"
 )
 
@@ -65,8 +68,14 @@ type Options struct {
 	Atespace, Template string
 	// TemplateFile, if set, is an ActorTemplate (YAML) the engine makes
 	// itself at startup, with the atespace, as Template-<hash of the file>
-	// (EnsureTemplate), and waits for its golden snapshot.
+	// (EnsureTemplate), and waits for its golden snapshot. It is E2B's.
 	TemplateFile string
+	// APITemplates are the other front ends' templates, by API ("sprites"
+	// for the Sprites API's own sandboxes, "vercel", "daytona", ...): files
+	// as TemplateFile, each made as <api>-<hash>. Their guests run
+	// sandpit-agent on AgentPort behind an upgrade, unclaimed until the
+	// sandbox's first resume (images/substrate-agent).
+	APITemplates map[string]string
 	// IdleSuspend suspends a sandbox nothing has used for this long; the next
 	// request resumes it. 0 never does. A suspended sandbox's background
 	// processes stop with it, which is why E2B's sandboxes are never idled
@@ -88,6 +97,7 @@ type Engine struct {
 	onBoot  []engine.BootHook
 	quit    chan struct{}
 
+	templates map[string]string // API -> ActorTemplate, once it is ready; guarded by mu
 	events    *engine.Bus
 	onDelete  []func(store.Sprite)
 	describer engine.Describer
@@ -115,16 +125,45 @@ func New(opts Options, st *store.Store, log *slog.Logger) (*Engine, error) {
 	e := &Engine{opts: opts, store: st, log: log.With("engine", "substrate"), api: ateapipb.NewControlClient(conn), conn: conn,
 		locks: map[string]*sync.Mutex{}, running: map[string]*guest{}, quit: make(chan struct{}),
 		events: engine.NewBus()}
-	if opts.TemplateFile != "" {
+	e.templates = map[string]string{"e2b": opts.Template}
+	ensure := func(api, base, file string) error {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
-		name, err := EnsureTemplate(ctx, e.api, opts.Atespace, opts.Template, opts.TemplateFile)
-		cancel()
+		defer cancel()
+		name, err := EnsureTemplate(ctx, e.api, opts.Atespace, base, file)
 		if err != nil {
+			return err
+		}
+		e.mu.Lock()
+		e.templates[api] = name
+		e.mu.Unlock()
+		e.log.Info("actor template ready", "api", api, "atespace", opts.Atespace, "template", name)
+		return nil
+	}
+	if opts.TemplateFile != "" {
+		if err := ensure("e2b", opts.Template, opts.TemplateFile); err != nil {
 			conn.Close()
 			return nil, fmt.Errorf("substrate: %w", err)
 		}
-		e.opts.Template = name
-		e.log.Info("actor template ready", "atespace", opts.Atespace, "template", name)
+		e.opts.Template = e.templates["e2b"]
+	}
+	// The other APIs' templates don't hold up the daemon: each is made in the
+	// background, retried until it is ready, and until then that API's creates
+	// are refused (Create).
+	for api, file := range opts.APITemplates {
+		go func() {
+			for {
+				err := ensure(api, api, file)
+				if err == nil {
+					return
+				}
+				e.log.Warn("actor template not ready; retrying in a minute", "api", api, "err", err)
+				select {
+				case <-e.quit:
+					return
+				case <-time.After(time.Minute):
+				}
+			}
+		}()
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
@@ -175,6 +214,22 @@ type ext struct {
 	// Started: the actor has been resumed (and booted) once, so it has a
 	// snapshot of its own, and every later resume is warm.
 	Started bool `json:"started,omitempty"`
+	// AgentToken is what this sandbox's sandpit-agent is claimed with on its
+	// first resume and asked for on every stream after; empty for a guest
+	// with no agent (E2B's).
+	AgentToken string `json:"agent_token,omitempty"`
+}
+
+// AgentPort is where sandpit-agent listens in an agent guest
+// (images/substrate-agent). Never reachable through a sandbox's public ports.
+const AgentPort = "2024"
+
+// apiOf is the key a record's template is found under.
+func apiOf(api string) string {
+	if api == "" {
+		return "sprites"
+	}
+	return api
 }
 
 const extKey = "substrate"
@@ -192,16 +247,33 @@ func (e *Engine) Create(ctx context.Context, spec engine.CreateSpec) (store.Spri
 	if spec.Checkpoint != nil {
 		return sp, errors.New("substrate: creating from a checkpoint is not supported yet")
 	}
+	api := apiOf(sp.API)
+	e.mu.Lock()
+	tmpl, ok := e.templates[api]
+	e.mu.Unlock()
+	if !ok {
+		if _, configured := e.opts.APITemplates[api]; configured {
+			return sp, fmt.Errorf("substrate: the %s API's actor template is not ready yet", api)
+		}
+		return sp, fmt.Errorf("%w: no actor template for the %s API (--api-template)", engine.ErrUnsupported, api)
+	}
 	if sp.Ext == nil {
 		sp.Ext = map[string]json.RawMessage{}
 	}
-	sp.Ext[extKey] = json.RawMessage(`{}`)
+	x := ext{}
+	if api != "e2b" {
+		b := make([]byte, 24)
+		rand.Read(b)
+		x.AgentToken = hex.EncodeToString(b)
+	}
+	raw, _ := json.Marshal(x)
+	sp.Ext[extKey] = raw
 	if err := e.store.Create(&sp); err != nil {
 		return sp, err
 	}
 	_, err := e.api.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
 		Metadata:      &ateapipb.ResourceMetadata{Atespace: e.opts.Atespace, Name: sp.ID},
-		ActorTemplate: &ateapipb.ObjectRef{Atespace: e.opts.Atespace, Name: e.opts.Template},
+		ActorTemplate: &ateapipb.ObjectRef{Atespace: e.opts.Atespace, Name: tmpl},
 	}})
 	if err != nil {
 		e.store.Delete(sp.ID)
@@ -260,8 +332,14 @@ func (e *Engine) Acquire(ctx context.Context, rec store.Record) (engine.Guest, f
 	if err != nil {
 		return nil, nil, fmt.Errorf("substrate: ResumeActor: %w", err)
 	}
-	g := &guest{e: e, id: rec.ID, lastUse: time.Now()}
-	warm := extOf(cur).Started
+	x := extOf(cur)
+	g := &guest{e: e, id: rec.ID, lastUse: time.Now(), agentToken: x.AgentToken}
+	warm := x.Started
+	if !warm && x.AgentToken != "" {
+		if err := g.claim(ctx); err != nil {
+			return nil, nil, err
+		}
+	}
 	e.mu.Lock()
 	hooks := e.onBoot
 	e.mu.Unlock()
@@ -271,7 +349,9 @@ func (e *Engine) Acquire(ctx context.Context, rec store.Record) (engine.Guest, f
 		}
 	}
 	if !warm {
-		e.store.UpdateRecord(rec.ID, func(r *store.Record) { r.Ext[extKey] = json.RawMessage(`{"started":true}`) })
+		x.Started = true
+		raw, _ := json.Marshal(x)
+		e.store.UpdateRecord(rec.ID, func(r *store.Record) { r.Ext[extKey] = raw })
 	}
 	e.mu.Lock()
 	e.running[rec.ID] = g
@@ -409,10 +489,11 @@ func (e *Engine) idleSuspend(id string) {
 
 // guest is an actor as the front end reaches it: its ports, through the router.
 type guest struct {
-	e        *Engine
-	id       string
-	inflight int       // guarded by e.mu
-	lastUse  time.Time // guarded by e.mu
+	e          *Engine
+	id         string
+	agentToken string    // empty: no agent in this guest
+	inflight   int       // guarded by e.mu
+	lastUse    time.Time // guarded by e.mu
 }
 
 func (g *guest) release() {
@@ -422,15 +503,77 @@ func (g *guest) release() {
 	g.e.mu.Unlock()
 }
 
-// Dial would be a stream to sandpit-agent, which a Substrate guest has none of.
-func (g *guest) Dial(context.Context) (net.Conn, error) {
-	return nil, errors.New("substrate: a sandbox here has no agent stream, only its HTTP ports")
+// Dial is a stream to the guest's sandpit-agent: a tunnel to AgentPort, an
+// upgrade the router lets through, and the agent's token handshake.
+func (g *guest) Dial(ctx context.Context) (net.Conn, error) {
+	if g.agentToken == "" {
+		return nil, errors.New("substrate: this sandbox's guest has no agent, only its HTTP ports")
+	}
+	c, err := g.agentStream(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if err := agent.Handshake(c, g.agentToken); err != nil {
+		c.Close()
+		return nil, err
+	}
+	c.SetDeadline(time.Time{})
+	return c, nil
 }
 
-// DialPort opens a tunnel to port on the actor: an HTTP CONNECT to the
-// router, which resumes the actor if it has to. What is sent through it must
-// be HTTP; the router re-routes every request in it.
+// claim gives an unclaimed agent this sandbox's token. A restored actor's
+// agent may take a moment to be reached through the router, so it is tried
+// for a while.
+func (g *guest) claim(ctx context.Context) error {
+	var last error
+	for i := 0; i < 20; i++ {
+		c, err := g.agentStream(ctx)
+		if err == nil {
+			err = agent.Claim(c, g.agentToken)
+			c.Close()
+			if err == nil {
+				return nil
+			}
+		}
+		last = err
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(250 * time.Millisecond):
+		}
+	}
+	return fmt.Errorf("substrate: claiming the agent: %w", last)
+}
+
+// agentStream is a tunnel to the agent, through the upgrade, with a deadline
+// for the handshake that follows (the caller clears it).
+func (g *guest) agentStream(ctx context.Context) (net.Conn, error) {
+	c, err := g.dialPort(ctx, AgentPort)
+	if err != nil {
+		return nil, err
+	}
+	c.SetDeadline(time.Now().Add(15 * time.Second))
+	uc, err := agent.DialUpgrade(c, g.id)
+	if err != nil {
+		c.Close()
+		return nil, err
+	}
+	return uc, nil
+}
+
+// DialPort opens a tunnel to a user's port on the actor (dialPort), never to
+// the agent's.
 func (g *guest) DialPort(ctx context.Context, port string) (net.Conn, error) {
+	if g.agentToken != "" && port == AgentPort {
+		return nil, fmt.Errorf("substrate: port %s is sandpit-agent's", port)
+	}
+	return g.dialPort(ctx, port)
+}
+
+// dialPort opens a tunnel to port on the actor: an HTTP CONNECT to the
+// router, which resumes the actor if it has to. What is sent through it must
+// be HTTP (or an upgrade to websocket); the router re-routes every request in it.
+func (g *guest) dialPort(ctx context.Context, port string) (net.Conn, error) {
 	if n, err := strconv.Atoi(port); err != nil || n < 1 || n > 65535 {
 		return nil, fmt.Errorf("substrate: invalid port %q", port)
 	}

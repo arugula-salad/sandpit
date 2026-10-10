@@ -64,6 +64,17 @@ func Bind(fs *flag.FlagSet) (finish func() (server.Options, *Flags)) {
 	flag.StringVar(&f.ate.Atespace, "atespace", "sandpit", "substrate: the atespace sandboxes are made in")
 	flag.StringVar(&f.ate.Template, "template", "e2b", "substrate: the ActorTemplate sandboxes are made from; with --template-file, the base of its name")
 	flag.StringVar(&f.ate.TemplateFile, "template-file", "", "substrate: an ActorTemplate (YAML) to make at startup, with the atespace, as <template>-<hash of the file>")
+	flag.Func("api-template", "substrate: api=file, the ActorTemplate (YAML) for another API's sandboxes (sprites, vercel, daytona, modal), made at startup as <api>-<hash>; its guest runs sandpit-agent (images/substrate-agent). Repeatable", func(v string) error {
+		api, file, ok := strings.Cut(v, "=")
+		if !ok || api == "" || file == "" {
+			return errors.New("want api=file")
+		}
+		if f.ate.APITemplates == nil {
+			f.ate.APITemplates = map[string]string{}
+		}
+		f.ate.APITemplates[api] = file
+		return nil
+	})
 	flag.DurationVar(&f.ate.IdleSuspend, "ate-idle-suspend", 0, "substrate: suspend a sandbox idle this long, warm; the next request resumes it (0: never)")
 	flag.StringVar(&f.listen, "listen", "127.0.0.1:7900", "the Sprites API and the dashboard (sandpit's block is 7900-7904: 7901 E2B, 7902 Vercel, 7903 Daytona, 7904 Modal, each off until its flag is given)")
 	flag.StringVar(&f.apiListen, "api-listen", "", "a second listen address serving the bearer API alone, whatever the Host: no dashboard and no sprite URLs. Point a reverse proxy that publishes the API here rather than at --listen")

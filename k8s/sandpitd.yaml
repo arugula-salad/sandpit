@@ -85,6 +85,9 @@ spec:
             - --atespace=sandpit
             - --template=e2b
             - --template-file=/etc/sandpit/actortemplate.yaml
+            - --api-template=sprites=/etc/sandpit/sprites.yaml
+            - --api-template=vercel=/etc/sandpit/vercel.yaml
+            - --api-template=daytona=/etc/sandpit/daytona.yaml
           ports:
             - {name: sprites, containerPort: 7900}
             - {name: e2b, containerPort: 7901}

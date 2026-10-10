@@ -59,6 +59,8 @@ func serve(args []string) {
 	runDir := fs.String("run-dir", "/run/sprite-services", "pid files; must not survive a reboot")
 	systemDir := fs.String("system-services-dir", "/etc/sandpit/services.d", "the image's own daemons, started at boot (vsock only); /etc/wisp/services.d is read when it is absent, for disks built before the rename")
 	system := fs.Bool("system-services", false, "start the image's own daemons on a tcp listener too: the agent is a sandbox's entrypoint (a Kubernetes pod), not a test on the host")
+	upgrade := fs.Bool("upgrade", false, "open each stream with an HTTP upgrade (Upgrade: websocket) answered 101, so it crosses a proxy that carries only HTTP (Agent Substrate's router)")
+	claim := fs.Bool("claim", false, "without SANDPIT_AGENT_TOKEN, take the token from the first stream that sends CLAIM <token> (a sandbox restored from a shared snapshot, which can't hold its own)")
 	fs.Parse(args)
 	*system = *system || *listen == "vsock"
 	// A pod's agent is reachable from the pod network, so it asks every stream
@@ -81,10 +83,16 @@ func serve(args []string) {
 	if err != nil {
 		log.Fatalf("listen: %v", err)
 	}
-	if token != "" {
+	if *upgrade {
+		ln = agent.UpgradeListener(ln)
+	}
+	switch {
+	case token != "":
 		ln = agent.TokenListener(ln, token)
-	} else if *system && *listen != "vsock" {
-		log.Fatal("SANDPIT_AGENT_TOKEN is required with --system-services on a network listener")
+	case *claim:
+		ln = agent.ClaimListener(ln)
+	case *system && *listen != "vsock":
+		log.Fatal("SANDPIT_AGENT_TOKEN or --claim is required with --system-services on a network listener")
 	}
 
 	// Before the supervisor exists: it starts services, and they must be confined too.

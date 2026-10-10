@@ -12,3 +12,4 @@
 /e2e/providers/*/node_modules/
 /e2e/providers/*/.venv/
 /e2e/providers/*/golden/.proxy-*
+/images/substrate-agent/sandpit-agent
