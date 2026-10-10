@@ -1,6 +1,6 @@
-# Public, gated only by sandpit's API key, like wisp's e2b.sandbox.inevitable.fyi: the API
-# under api.e2b.substrate.inevitable.fyi (E2B's SDK prefixes the domain) and each sandbox port
-# at <port>-<id>.e2b.substrate.inevitable.fyi. home-cloud's *.inevitable.fyi record already
+# Public, gated only by sandpitd's keys, like wisp's *.sandbox.inevitable.fyi: each API at
+# <api>.substrate.inevitable.fyi and its sandbox hosts under it (E2B's <port>-<id>.e2b.,
+# Vercel's <subdomain>.vercel. routes, Daytona's <port>-<id>.daytona. previews). home-cloud's *.inevitable.fyi record already
 # points here; the certificate is DNS-01.
 apiVersion: cert-manager.io/v1
 kind: Certificate
@@ -30,3 +30,61 @@ spec:
           port: 7901
   tls:
     secretName: sandpit-e2b-tls
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: sandpit-vercel-tls
+spec:
+  secretName: sandpit-vercel-tls
+  issuerRef:
+    name: letsencrypt-production
+    kind: ClusterIssuer
+  dnsNames:
+    - vercel.substrate.inevitable.fyi
+    - "*.vercel.substrate.inevitable.fyi"
+---
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: sandpit-vercel
+spec:
+  entryPoints:
+    - websecure
+  routes:
+    - match: Host(`vercel.substrate.inevitable.fyi`) || HostRegexp(`^[a-z0-9-]+\.vercel\.substrate\.inevitable\.fyi$`)
+      kind: Rule
+      services:
+        - name: sandpitd
+          port: 7902
+  tls:
+    secretName: sandpit-vercel-tls
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: sandpit-daytona-tls
+spec:
+  secretName: sandpit-daytona-tls
+  issuerRef:
+    name: letsencrypt-production
+    kind: ClusterIssuer
+  dnsNames:
+    - daytona.substrate.inevitable.fyi
+    - "*.daytona.substrate.inevitable.fyi"
+---
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: sandpit-daytona
+spec:
+  entryPoints:
+    - websecure
+  routes:
+    - match: Host(`daytona.substrate.inevitable.fyi`) || HostRegexp(`^[a-z0-9-]+\.daytona\.substrate\.inevitable\.fyi$`)
+      kind: Rule
+      services:
+        - name: sandpitd
+          port: 7903
+  tls:
+    secretName: sandpit-daytona-tls

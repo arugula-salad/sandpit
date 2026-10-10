@@ -80,6 +80,10 @@ spec:
             - --listen=0.0.0.0:7900
             - --e2b-listen=0.0.0.0:7901
             - --e2b-public-url=https://e2b.substrate.inevitable.fyi
+            - --vercel-listen=0.0.0.0:7902
+            - --vercel-public-url=https://vercel.substrate.inevitable.fyi
+            - --daytona-listen=0.0.0.0:7903
+            - --daytona-public-url=https://daytona.substrate.inevitable.fyi
             - --ate-ca=/run/ate/ca.pem
             - --ate-token=/run/ate/token
             - --atespace=sandpit
@@ -91,6 +95,8 @@ spec:
           ports:
             - {name: sprites, containerPort: 7900}
             - {name: e2b, containerPort: 7901}
+            - {name: vercel, containerPort: 7902}
+            - {name: daytona, containerPort: 7903}
           # The first start waits for the template's golden snapshot before it listens.
           startupProbe:
             tcpSocket:
@@ -147,3 +153,5 @@ spec:
   ports:
     - {name: sprites, port: 7900, targetPort: sprites}
     - {name: e2b, port: 7901, targetPort: e2b}
+    - {name: vercel, port: 7902, targetPort: vercel}
+    - {name: daytona, port: 7903, targetPort: daytona}
