@@ -1,0 +1,15 @@
+# sandpit-kube (cmd/sandpit-kube): the E2B API on Kubernetes, run in the cluster it
+# drives. Built from the repo root:
+#   docker build -f images/sandpit-kube/Containerfile .
+# by .github/workflows/substrate-images.yml, which pins the result into k8s/.
+FROM docker.io/library/golang:1.27.1 AS build
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 go build -trimpath -ldflags=-s -o /sandpit-kube ./cmd/sandpit-kube
+
+FROM gcr.io/distroless/static-debian12:nonroot
+COPY --from=build /sandpit-kube /sandpit-kube
+USER nonroot
+ENTRYPOINT ["/sandpit-kube"]

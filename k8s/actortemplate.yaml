@@ -1,0 +1,23 @@
+# The E2B guest (images/substrate) as an ActorTemplate, the protojson shape
+# `kubectl ate create actor-template -f` takes, for Substrate v0.4.0. sandpit-kube makes it
+# (--template-file) as e2b-<hash of this file>. Snapshots go to home-cloud's Garage bucket
+# agent-substrate (the gs:// scheme is Substrate's, whatever the backend).
+workerSelector:
+  matchLabels:
+    workload: sandpit-e2b
+containers:
+- name: envd
+  image: ghcr.io/arugula-salad/sandpit-e2b-guest@sha256:0000000000000000000000000000000000000000000000000000000000000000
+  securityContext:
+    capabilities:
+      add: [CHOWN, DAC_OVERRIDE, FOWNER, FSETID, SETUID, SETGID, SETPCAP, SETFCAP, SYS_CHROOT, MKNOD]
+resources:
+  limits:
+  - {name: cpu, quantity: "2"}
+  - {name: memory, quantity: 1Gi}
+snapshotConfig:
+  onCommit: SNAPSHOT_CONTENT_SCOPE_FULL
+  storageLocation: gs://agent-substrate/sandpit/
+sandboxConfig:
+  sandboxClass: SANDBOX_CLASS_GVISOR
+  configName: gvisor-default

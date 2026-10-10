@@ -13,9 +13,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/arugula-salad/sandpit/engine"
 	"github.com/gorilla/websocket"
-
-	"github.com/arugula-salad/sandpit/internal/vmm"
 )
 
 // The guest side: sandpit-agent's exec and filesystem API (internal/agent),
@@ -58,7 +57,7 @@ type guestProc struct {
 // startExec starts a process with no stdin and no TTY that keeps running if
 // this connection drops (max_run_after_disconnect=0): the connection is held
 // for the process's life anyway, by whoever reads it.
-func (f *Frontend) startExec(ctx context.Context, m *vmm.Machine, spec execSpec) (*guestProc, error) {
+func (f *Frontend) startExec(ctx context.Context, m engine.Guest, spec execSpec) (*guestProc, error) {
 	q := url.Values{}
 	for _, a := range spec.argv {
 		q.Add("cmd", a)
@@ -152,12 +151,12 @@ func (p *guestProc) next() (stream byte, data []byte, exited bool, code int, err
 func (p *guestProc) close() { p.conn.Close() }
 
 // agentHTTP is an HTTP client for one VM's guest agent.
-func (f *Frontend) agentHTTP(m *vmm.Machine) *http.Client {
+func (f *Frontend) agentHTTP(m engine.Guest) *http.Client {
 	return &http.Client{Transport: &http.Transport{DisableKeepAlives: true, DialContext: f.dialAgent(m)}}
 }
 
 // signal delivers sig to a process the agent started, and its group.
-func (f *Frontend) signal(ctx context.Context, m *vmm.Machine, agentID string, sig int) error {
+func (f *Frontend) signal(ctx context.Context, m engine.Guest, agentID string, sig int) error {
 	req, _ := http.NewRequestWithContext(ctx, http.MethodPost,
 		"http://agent/exec/"+url.PathEscape(agentID)+"/kill?timeout=0&signal="+strconv.Itoa(sig), nil)
 	resp, err := f.agentHTTP(m).Do(req)
@@ -176,7 +175,7 @@ func (f *Frontend) signal(ctx context.Context, m *vmm.Machine, agentID string, s
 }
 
 // runShort runs a short command to completion and collects its output.
-func (f *Frontend) runShort(ctx context.Context, m *vmm.Machine, spec execSpec) (stdout, stderr string, code int, err error) {
+func (f *Frontend) runShort(ctx context.Context, m engine.Guest, spec execSpec) (stdout, stderr string, code int, err error) {
 	p, err := f.startExec(ctx, m, spec)
 	if err != nil {
 		return "", "", 0, err
@@ -223,7 +222,7 @@ func readAgentFSError(resp *http.Response) error {
 // writeFile writes one file through the agent (PUT /fs/write), creating its
 // parents. New files and directories belong to the agent's user, which in the
 // Vercel image is uid 1000, `ubuntu`.
-func (f *Frontend) writeFile(ctx context.Context, m *vmm.Machine, path string, mode int64, size int64, body io.Reader) error {
+func (f *Frontend) writeFile(ctx context.Context, m engine.Guest, path string, mode int64, size int64, body io.Reader) error {
 	q := url.Values{"path": {path}, "mode": {strconv.FormatInt(mode&0o7777, 8)}, "mkdirParents": {"true"}}
 	req, _ := http.NewRequestWithContext(ctx, http.MethodPut, "http://agent/fs/write?"+q.Encode(), body)
 	req.ContentLength = size
@@ -241,7 +240,7 @@ func (f *Frontend) writeFile(ctx context.Context, m *vmm.Machine, path string, m
 
 // openFile reads one file through the agent (GET /fs/read). A missing one is
 // an agentFSError with status 404.
-func (f *Frontend) openFile(ctx context.Context, m *vmm.Machine, path string) (*http.Response, error) {
+func (f *Frontend) openFile(ctx context.Context, m engine.Guest, path string) (*http.Response, error) {
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "http://agent/fs/read?"+url.Values{"path": {path}}.Encode(), nil)
 	resp, err := f.agentHTTP(m).Do(req)
 	if err != nil {

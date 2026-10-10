@@ -23,7 +23,6 @@ import (
 
 	"github.com/arugula-salad/sandpit/engine"
 	"github.com/arugula-salad/sandpit/internal/store"
-	"github.com/arugula-salad/sandpit/internal/vmm"
 )
 
 const (
@@ -75,13 +74,13 @@ func newFixture(t *testing.T) *fixture {
 			}
 			return false, false
 		}}, st, life, quiet)
-	fx.f.acquire = func(ctx context.Context, rec store.Record) (*vmm.Machine, func(), error) {
+	fx.f.acquire = func(ctx context.Context, rec store.Record) (engine.Guest, func(), error) {
 		fx.mu.Lock()
 		fx.boots++
 		fx.mu.Unlock()
 		return nil, func() {}, nil
 	}
-	fx.f.dialEnvd = func(*vmm.Machine) dialFunc { return fx.dial }
+	fx.f.dialEnvd = func(engine.Guest) dialFunc { return fx.dial }
 	fx.h = fx.f.Handler()
 	return fx
 }
@@ -694,7 +693,7 @@ func TestInitEnvd(t *testing.T) {
 	var mu sync.Mutex
 	var inits []initRequest
 	refuse := 3 // the first dials find nothing listening: envd is still starting
-	fx.f.dialEnvd = func(*vmm.Machine) dialFunc {
+	fx.f.dialEnvd = func(engine.Guest) dialFunc {
 		return func(ctx context.Context, port string) (net.Conn, error) {
 			if port != EnvdPort {
 				t.Errorf("dialled port %s", port)

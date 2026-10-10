@@ -8,8 +8,6 @@ import (
 	"net/http"
 	"strconv"
 	"time"
-
-	"github.com/arugula-salad/sandpit/internal/vmm"
 )
 
 // bufferedConn replays bytes the HTTP response parser read past the 101.
@@ -21,11 +19,17 @@ type bufferedConn struct {
 func (c *bufferedConn) Read(p []byte) (int, error) { return c.r.Read(p) }
 
 // DialPort opens a raw TCP stream to localhost:port inside the guest,
-// tunnelled over vsock through the guest agent, so it needs no guest network.
+// tunnelled through the guest agent (over vsock, for a VM), so it needs no
+// guest network.
 // port is a number, or "http" for the sprite's URL target (its HTTP service,
 // else 8080). m is a VM Acquire returned, held for as long as the stream is
 // used; a boot hook (OnBoot) may dial the VM it is given.
-func DialPort(ctx context.Context, m *vmm.Machine, port string) (net.Conn, error) {
+//
+// A guest that is a PortDialer is asked instead, with the port as given.
+func DialPort(ctx context.Context, m Guest, port string) (net.Conn, error) {
+	if pd, ok := m.(PortDialer); ok {
+		return pd.DialPort(ctx, port)
+	}
 	// Only a port number, or "http" (the agent's name for the sandbox's own HTTP
 	// service), goes into the agent's request: anything else would be spliced
 	// into its query string, where it could name another host to dial.

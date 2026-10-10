@@ -22,7 +22,6 @@ import (
 	"github.com/arugula-salad/sandpit/engine"
 	"github.com/arugula-salad/sandpit/internal/agent"
 	"github.com/arugula-salad/sandpit/internal/store"
-	"github.com/arugula-salad/sandpit/internal/vmm"
 	"github.com/gorilla/websocket"
 )
 
@@ -84,7 +83,7 @@ func newFixture(t *testing.T) *fixture {
 		return false, false
 	}}, st, life, quiet)
 	fx.f.homeDir, fx.f.stateDir = fx.home, filepath.Join(t.TempDir(), "sessions")
-	fx.f.acquire = func(ctx context.Context, rec store.Record) (*vmm.Machine, func(), error) {
+	fx.f.acquire = func(ctx context.Context, rec store.Record) (engine.Guest, func(), error) {
 		fx.mu.Lock()
 		defer fx.mu.Unlock()
 		if !fx.up[rec.ID] {
@@ -105,12 +104,12 @@ func newFixture(t *testing.T) *fixture {
 		return fx.up[id], false
 	}
 	agentAddr := agentSrv.Listener.Addr().String()
-	fx.f.agentDial = func(*vmm.Machine) func(ctx context.Context, network, addr string) (net.Conn, error) {
+	fx.f.agentDial = func(engine.Guest) func(ctx context.Context, network, addr string) (net.Conn, error) {
 		return func(ctx context.Context, _, _ string) (net.Conn, error) {
 			return (&net.Dialer{}).DialContext(ctx, "tcp", agentAddr)
 		}
 	}
-	fx.f.portDial = func(ctx context.Context, _ *vmm.Machine, port string) (net.Conn, error) {
+	fx.f.portDial = func(ctx context.Context, _ engine.Guest, port string) (net.Conn, error) {
 		fx.mu.Lock()
 		fx.dialed = append(fx.dialed, port)
 		fx.mu.Unlock()

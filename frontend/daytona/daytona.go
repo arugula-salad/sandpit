@@ -40,7 +40,6 @@ import (
 
 	"github.com/arugula-salad/sandpit/engine"
 	"github.com/arugula-salad/sandpit/internal/store"
-	"github.com/arugula-salad/sandpit/internal/vmm"
 )
 
 // API is the Record.API of a Daytona sandbox, and the Record.Ext key its metadata is under.
@@ -90,11 +89,27 @@ type Options struct {
 	MaxSandboxes int
 }
 
+// Engine is what this front end needs of an engine: sandpit's own
+// (*engine.Engine, Firecracker VMs) or another that runs sandboxes elsewhere.
+type Engine interface {
+	Create(ctx context.Context, spec engine.CreateSpec) (store.Sprite, error)
+	Delete(rec store.Record) error
+	Acquire(ctx context.Context, rec store.Record) (engine.Guest, func(), error)
+	Stop(rec store.Record) error
+	Peek(id string) engine.VMView
+	BeginUse(id string) (end func())
+	SetPolicy(id string, p store.LifecyclePolicy) (store.Record, error)
+	Events() *engine.Bus
+	OnDelete(f func(store.Sprite))
+}
+
+var _ Engine = (*engine.Engine)(nil)
+
 // Frontend is the Daytona API on an engine.
 type Frontend struct {
 	opts    Options
 	store   *store.Store
-	life    *engine.Engine
+	life    Engine
 	log     *slog.Logger
 	diskGiB int // the image's size, reported as every sandbox's disk
 
@@ -120,15 +135,15 @@ type Frontend struct {
 	// release (Acquire); stop is Stop; running asks Peek whether the VM is up
 	// (or in a transition); agentDial reaches the guest's sandpit-agent and
 	// portDial one of its ports.
-	acquire   func(context.Context, store.Record) (*vmm.Machine, func(), error)
+	acquire   func(context.Context, store.Record) (engine.Guest, func(), error)
 	stop      func(store.Record) error
 	running   func(id string) (up, busy bool)
-	agentDial func(*vmm.Machine) func(ctx context.Context, network, addr string) (net.Conn, error)
-	portDial  func(ctx context.Context, m *vmm.Machine, port string) (net.Conn, error)
+	agentDial func(engine.Guest) func(ctx context.Context, network, addr string) (net.Conn, error)
+	portDial  func(ctx context.Context, m engine.Guest, port string) (net.Conn, error)
 }
 
 // New attaches the Daytona front end to life.
-func New(opts Options, st *store.Store, life *engine.Engine, log *slog.Logger) *Frontend {
+func New(opts Options, st *store.Store, life Engine, log *slog.Logger) *Frontend {
 	f := &Frontend{opts: opts, store: st, life: life, log: log.With("api", API),
 		acquire: life.Acquire, stop: life.Stop, agentDial: engine.AgentDial, portDial: engine.DialPort,
 		running: func(id string) (bool, bool) { v := life.Peek(id); return v.Running(), v.Busy }}

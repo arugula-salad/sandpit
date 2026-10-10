@@ -1,0 +1,6 @@
+# Its own namespace, not fleet's shared `arugula`: ate-api has no authorization, and home-cloud's
+# NetworkPolicy on it admits this namespace (and ate-system) only.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: sandpit

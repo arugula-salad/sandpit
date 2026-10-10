@@ -1,0 +1,35 @@
+# ActorTemplate (protojson ateapipb.ActorTemplate) for E2B sandboxes, created
+# with `kubectl ate create actor-template -f -`; the sandpit atespace must
+# exist. ${IMAGE} is scripts/build-substrate-image.sh's output (by digest),
+# ${SNAPSHOTS} the snapshot bucket prefix. The golden snapshot is taken with
+# envd up, so a new sandbox resumes with it already listening.
+metadata:
+  atespace: sandpit
+  name: e2b
+workerSelector:
+  matchLabels:
+    workload: sandpit-e2b
+containers:
+- name: envd
+  image: ${IMAGE}
+  # Substrate grants AUDIT_WRITE, KILL and NET_BIND_SERVICE; envd runs commands
+  # as the sandbox's user and chowns the files it writes for them, so it needs
+  # the rest of a container runtime's usual set. gVisor stays the boundary.
+  securityContext:
+    capabilities:
+      add: [CHOWN, DAC_OVERRIDE, FOWNER, FSETID, SETUID, SETGID, SETPCAP, SETFCAP, SYS_CHROOT, MKNOD]
+  # No wakeupProbe: it wants exactly 200, and envd's open /health answers 204
+  # while /envs, which answers 200, needs the sandbox's token once it has one,
+  # so the probe fails every resume after the first. A resumed envd is
+  # listening already (it is in the snapshot); only the golden snapshot waits,
+  # for Substrate's default 20 s warm-up.
+resources:
+  limits:
+  - {name: cpu, quantity: "2"}
+  - {name: memory, quantity: 1Gi}
+snapshotConfig:
+  preferredFidelity: SNAPSHOT_FIDELITY_MEMORY
+  storageLocation: ${SNAPSHOTS}
+sandboxConfig:
+  sandboxClass: SANDBOX_CLASS_GVISOR
+  configName: gvisor-default

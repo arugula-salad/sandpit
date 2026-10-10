@@ -4,7 +4,9 @@ import (
 	"log"
 	"net"
 	"os"
+	"os/signal"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/vishvananda/netlink"
@@ -181,16 +183,45 @@ func runInit() {
 	}
 	setupNetwork(p)
 
+	supervise([]string{"sandpit-agent", "serve"}, []string{"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", "HOME=/root"}, nil)
+}
+
+// runContainerInit is PID 1 in a container (a Kubernetes pod) whose command is
+// `sandpit-agent serve ...`: the container runtime has set the system up, so
+// all that is left of init is supervising the server and reaping orphans,
+// and, since nothing else will, ending the container on SIGTERM.
+func runContainerInit() {
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, unix.SIGTERM, unix.SIGINT)
+	supervise(os.Args, os.Environ(), sig)
+}
+
+// supervise runs the server (argv, env) and reaps everything, restarting the
+// server whenever it is the one that died. A signal on stop ends it: the
+// server is sent SIGTERM and the process exits.
+func supervise(argv, env []string, stop <-chan os.Signal) {
+	var cur atomic.Pointer[os.Process]
+	if stop != nil {
+		go func() {
+			<-stop
+			if p := cur.Load(); p != nil {
+				p.Signal(unix.SIGTERM)
+				time.Sleep(2 * time.Second) // its services' turn to go
+			}
+			os.Exit(0)
+		}()
+	}
 	for {
-		proc, err := os.StartProcess("/proc/self/exe", []string{"sandpit-agent", "serve"}, &os.ProcAttr{
+		proc, err := os.StartProcess("/proc/self/exe", argv, &os.ProcAttr{
 			Files: []*os.File{os.Stdin, os.Stdout, os.Stderr},
-			Env:   []string{"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", "HOME=/root"},
+			Env:   env,
 		})
 		if err != nil {
 			log.Printf("start server: %v", err)
 			time.Sleep(time.Second)
 			continue
 		}
+		cur.Store(proc)
 		// Reap everything; orphans are reparented to us. Restart the server if it is the one that died.
 		for {
 			var ws unix.WaitStatus

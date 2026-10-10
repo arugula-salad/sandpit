@@ -30,7 +30,7 @@ func TestBootHookOnRunningVMs(t *testing.T) {
 	var boots []Boot
 	var fail error
 	l.OnBoot(func(ctx context.Context, b Boot) error {
-		if b.Record.ID != r.ID || b.Machine == nil {
+		if b.Record.ID != r.ID || b.Guest == nil {
 			t.Errorf("hook given %+v", b)
 		}
 		if !l.Peek(r.ID).Busy {

@@ -1,0 +1,12 @@
+# A guest image for the kube engine (kube/, cmd/sandpit-kube): a sandpit userland
+# with sandpit-agent as the container's entrypoint. In a Firecracker VM the agent
+# is PID 1 from the initramfs and talks vsock; in a pod it is the entrypoint and
+# talks TCP, asking every stream for the token the engine gives the pod
+# (SANDPIT_AGENT_TOKEN), and --system-services starts the image's own daemons
+# (E2B's envd) as it does in a VM. The engine passes the arguments; the CMD here
+# is the same, for running the image by hand. Build with scripts/build-kube-image.sh.
+ARG USERLAND=sandpit-e2b:dev
+FROM ${USERLAND}
+COPY --chmod=0755 sandpit-agent /usr/local/sbin/sandpit-agent
+ENTRYPOINT ["/usr/local/sbin/sandpit-agent"]
+CMD ["serve", "--system-services", "--listen", "tcp:0.0.0.0:2024"]

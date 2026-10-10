@@ -39,7 +39,6 @@ import (
 
 	"github.com/arugula-salad/sandpit/engine"
 	"github.com/arugula-salad/sandpit/internal/store"
-	"github.com/arugula-salad/sandpit/internal/vmm"
 )
 
 // API is the Record.API of a Vercel sandbox, and the Record.Ext key its metadata is under.
@@ -96,11 +95,28 @@ type Options struct {
 	Sudo string
 }
 
+// Engine is what this front end needs of an engine: sandpit's own
+// (*engine.Engine, Firecracker VMs) or another that runs sandboxes elsewhere.
+type Engine interface {
+	Create(ctx context.Context, spec engine.CreateSpec) (store.Sprite, error)
+	Delete(rec store.Record) error
+	Acquire(ctx context.Context, rec store.Record) (engine.Guest, func(), error)
+	Stop(rec store.Record) error
+	SetDeadline(id string, at *time.Time, action store.DeadlineAction) (store.Record, error)
+	CreateCheckpoint(rec store.Record, from *engine.GuestChan, comment string, info engine.Progress) (store.Checkpoint, error)
+	DeleteCheckpoint(rec store.Record, id string) error
+	HoldCheckpoint(rec store.Record, id string) (cur store.Record, checkpoint string, release func(), err error)
+	RestoreCheckpoint(rec store.Record, from *engine.GuestChan, id string, info engine.Progress, beforeStop func()) error
+	OnDelete(f func(store.Sprite))
+}
+
+var _ Engine = (*engine.Engine)(nil)
+
 // Frontend is the Vercel Sandbox API on an engine.
 type Frontend struct {
 	opts  Options
 	store *store.Store
-	life  *engine.Engine
+	life  Engine
 	log   *slog.Logger
 
 	// locks serializes the lifecycle transitions of one sandbox (create's
@@ -117,9 +133,9 @@ type Frontend struct {
 	// release (the engine's Acquire); dialAgent reaches a VM's guest agent and
 	// dialPort a port in it (the engine's agent transport and port dial).
 	// Fields so that tests can stand in for a VM.
-	acquire   func(context.Context, store.Record) (*vmm.Machine, func(), error)
-	dialAgent func(*vmm.Machine) func(ctx context.Context, network, addr string) (net.Conn, error)
-	dialPort  func(ctx context.Context, m *vmm.Machine, port string) (net.Conn, error)
+	acquire   func(context.Context, store.Record) (engine.Guest, func(), error)
+	dialAgent func(engine.Guest) func(ctx context.Context, network, addr string) (net.Conn, error)
+	dialPort  func(ctx context.Context, m engine.Guest, port string) (net.Conn, error)
 	now       func() time.Time
 	// checkpoint checkpoints a stopped sandbox's disk (the engine's
 	// CreateCheckpoint): a field so that tests can make it fail.
@@ -127,7 +143,7 @@ type Frontend struct {
 }
 
 // New attaches the Vercel front end to life.
-func New(opts Options, st *store.Store, life *engine.Engine, log *slog.Logger) *Frontend {
+func New(opts Options, st *store.Store, life Engine, log *slog.Logger) *Frontend {
 	if opts.MaxTimeout <= 0 {
 		opts.MaxTimeout = 24 * time.Hour
 	}

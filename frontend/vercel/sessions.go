@@ -12,7 +12,6 @@ import (
 
 	"github.com/arugula-salad/sandpit/engine"
 	"github.com/arugula-salad/sandpit/internal/store"
-	"github.com/arugula-salad/sandpit/internal/vmm"
 )
 
 // Sessions: one run of a sandbox's VM each, addressed by session ID. A call on
@@ -66,7 +65,7 @@ func stopping(w http.ResponseWriter) {
 // marks the session stopping under the same lock before it stops the VM)
 // cannot be overtaken by traffic that would wake the VM behind it. A session
 // past its timeout is ended here. On failure the answer is written.
-func (f *Frontend) acquireRunning(w http.ResponseWriter, ctx context.Context, id, sid string) (*vmm.Machine, func(), bool) {
+func (f *Frontend) acquireRunning(w http.ResponseWriter, ctx context.Context, id, sid string) (engine.Guest, func(), bool) {
 	unlock := f.lock(id)
 	defer unlock()
 	rec, err := f.store.GetRecord(id)
