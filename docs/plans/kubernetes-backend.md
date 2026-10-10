@@ -1,19 +1,29 @@
-# Plan: sandpit on Kubernetes (agent-sandbox)
+# Plan: sandpit on Kubernetes (Agent Substrate, agent-sandbox)
 
 Goal: the API front ends sandpit already has (Sprites, E2B, Vercel, Daytona, Modal) running on
-Kubernetes as well as on Firecracker. Sandboxes become [agent-sandbox](https://github.com/kubernetes-sigs/agent-sandbox)
-`Sandbox` objects: one pod each, with a stable identity and a persistent volume, isolated by
-the cluster's RuntimeClass (gVisor, Kata). The bar is the same as for Firecracker: the
-providers' unmodified SDKs pass their probe suites. Where a backend can't do something, the
-docs say so. Written 2026-10-10, after a refactor and a spike on branch `k8s-backend`.
+Kubernetes as well as on Firecracker, with the same bar: the providers' unmodified SDKs pass
+their probe suites, and where a backend can't do something, the docs say so. Written
+2026-10-10 on branch `k8s-backend`, after a refactor and two spikes, one per Kubernetes
+substrate.
+
+**Recommendation:** build the Kubernetes backend on
+[Agent Substrate](https://github.com/agent-substrate/substrate), with
+[agent-sandbox](https://github.com/kubernetes-sigs/agent-sandbox) as the simple fallback.
+Substrate is the Firecracker engine's model (sleep warm, wake on the next request) on
+Kubernetes, and it passed every E2B probe step, including the one agent-sandbox can't. It is
+also pre-1.0 and heavier to run, which is why the fallback stays.
 
 ## Where it stands
 
-**The seam (commit `702f2ec`, no behaviour change).** The front ends reached a sandbox as a
-`*vmm.Machine`, but only ever to open a stream to its guest agent. That is now `engine.Guest`
-(`engine/guest.go`): one `Dial(ctx)` method. `Acquire`, `Boot`, `DialPort`, `AgentDial` and
-`AgentTransport` take or return it. Each front end now declares the slice of the engine it
-uses (`e2b.Engine`, `vercel.Engine`, `daytona.Engine`, `modal.Engine`) instead of taking
+### The seam (commit `702f2ec`, no behaviour change)
+
+The front ends reached a sandbox as a `*vmm.Machine`, but only ever to open a stream to its
+guest agent. That is now `engine.Guest` (`engine/guest.go`): one `Dial(ctx)` method.
+`Acquire`, `Boot`, `DialPort`, `AgentDial` and `AgentTransport` take or return it. A guest
+that reaches ports some other way can also implement `engine.PortDialer`, which `DialPort`
+prefers (added for Substrate).
+
+Each front end now declares the slice of the engine it uses, instead of taking
 `*engine.Engine`. Each checks at compile time that `*engine.Engine` still satisfies it.
 
 | Front end | Engine methods it needs |
@@ -24,143 +34,144 @@ uses (`e2b.Engine`, `vercel.Engine`, `daytona.Engine`, `modal.Engine`) instead o
 | Vercel | Create, Delete, Acquire, Stop, SetDeadline, Create/Delete/Hold/RestoreCheckpoint, OnDelete |
 | Sprites (`internal/server`) | still `*engine.Engine`: about 25 methods, plus backups, images, network policy and checkpoints |
 
-**The spike (commit `77d358c`): the E2B API on agent-sandbox.**
-- `kube/` (`kube.Engine`) satisfies `e2b.Engine`.
-- `cmd/sandpit-kube` serves the existing E2B front end on that engine.
-- `images/kube` is the E2B userland with `sandpit-agent` as its entrypoint, built by
-  `scripts/build-kube-image.sh`.
+### Two spikes, one front end
 
-How sandpit concepts map onto agent-sandbox:
+`cmd/sandpit-kube` serves the unchanged E2B front end on either engine
+(`--engine kube|substrate`). Both runs used `e2e/providers/e2b/run.sh` unmodified, with the
+official SDKs (Python `e2b` 2.52.0, JS 2.52.0), on kind.
 
-| sandpit | agent-sandbox / Kubernetes |
-|---|---|
-| Create | `Sandbox` with `operatingMode: Running`, a PVC template on `--persist` (default `/home/user`, seeded from the image on first start), and a token `Secret` the Sandbox owns |
-| Acquire | patch `Running`, wait for the pod (from a watch, not polling), agent `/healthz`, boot hooks. A running sandbox is served from the cache with no API call |
-| Suspend / Stop | patch `Suspended`: the pod is deleted and the PVC kept. Returns once the pod is gone |
-| Delete | delete the Sandbox. Garbage collection takes the pod, the PVC (and its PV) and the Secret |
-| Deadlines | a janitor over the store's `ExpiresAt` and deadline action (delete, or suspend for E2B's `autoPause`) |
-| Guest transport | TCP to `sandpit-agent` in the pod, by pod IP (in-cluster) or through the API server's `pods/portforward` (from outside) |
-| Guest auth | a per-sandbox token. Each stream opens with `AUTH <token>` / `OK`, the TCP counterpart of vsock's `CONNECT` line (`agent.TokenListener`) |
+| | `kube`: agent-sandbox v1.0.4 (commit `77d358c`) | `substrate`: Substrate `f2006302` (commit `14830b1`) |
+|---|---|---|
+| A sandbox is | a `Sandbox`: one pod plus a PVC | an actor, restored onto one of a pool of warm gVisor workers |
+| Probe, both SDKs | 12/13: everything but `pause_resume` | **13/13** |
+| Create | ~5–7 s (PVC and pod start) | **~150 ms** (restore from the template's golden snapshot) |
+| Pause, then resume | 5 s, then 1.8 s, **cold**: processes, `/tmp` and anything off the volume are lost | **~360 ms** for both: memory, processes and the whole filesystem kept |
+| Idle sandboxes | hold a pod (or are stopped cold) | `--idle-suspend`: snapshotted when idle (~100 ms), and the next request wakes them in ~120 ms with processes running |
+| Guest | E2B userland plus `sandpit-agent` (TCP, token handshake) | E2B userland with envd as the actor's process. No agent (see below) |
+| Isolation in the spike | runc (kind has no gVisor) | **gVisor** (Substrate ships `runsc`) |
+| Timeouts (kill, auto-pause), kill cleanup, restart adoption | ✅ | ✅ (restart not re-tested) |
 
-Result against kind (Kubernetes v1.34, agent-sandbox v1.0.4, runc, so no isolation), using
-`e2e/providers/e2b/run.sh` unmodified with the official SDKs (Python `e2b` 2.52.0, JS 2.52.0):
+### What the spikes found
 
-| Step | Py | JS | |
-|---|---|---|---|
-| create | ✅ | ✅ | ~5–7 s cold, including PVC provisioning and pod start |
-| exec_stream, exec_exit_code, background_kill, stdin_pty | ✅ | ✅ | |
-| files, upload_download (incl. signed URLs) | ✅ | ✅ | |
-| port (a user server on 8080 through the agent's port tunnel) | ✅ | ✅ | |
-| set_timeout, metrics, list, kill | ✅ | ✅ | |
-| pause_resume | ❌ | ❌ | the probe expects `/tmp` (and hosted's memory) to survive a pause. Only the volume does |
-
-Checked by hand as well:
-- pause takes 5 s and resume 1.8 s (cold).
-- `/home/user` survives a pause, and its dotfiles are seeded and owned by `user`.
-- Both timeout actions fire (kill, and auto-pause then connect).
-- Kill leaves nothing behind: Sandbox, pod, PVC, PV and Secret all go.
-- Restarting `sandpit-kube` adopts live pods in 26 ms.
-
-### What the spike found
-
-- **Memory doesn't survive a pause.** A suspended Sandbox has no pod. Every start here is
-  cold (`Boot.Warm` is never true), and processes and anything off the volume are lost. This
-  is the biggest semantic gap. Hosted E2B, Sprites and Daytona all keep running state across a
-  pause, while Vercel's stop and Modal's terminate don't.
-- **Pods must be Guaranteed QoS.** E2B's envd starts every command with
+**agent-sandbox (`kube`):**
+- **Pods must be Guaranteed QoS.** envd starts every command with
   `echo 100 > /proc/$$/oom_score_adj`. In a Burstable pod (`oom_score_adj` 996) that is a
-  lowering, which needs `CAP_SYS_RESOURCE`, so *every* command failed with
-  `echo: I/O error`. Requests now equal limits on every container, init included.
-- **`sandpit-agent` as PID 1 in a container** took its VM-init path (mounts, then `serve` on
-  vsock). It now spots `serve` as PID 1 and only supervises, reaps and forwards SIGTERM
-  (`runContainerInit`). `--system-services` starts the image's daemons off vsock.
-- **The agent on TCP needed authentication.** Anything on the pod network could otherwise
-  exec in any sandbox. The token handshake is the minimum. NetworkPolicy and TLS are still to
-  come (below).
-- **Port-forward works but is the slow path.** Each dial is a new SPDY connection through the
-  API server, and gVisor and Kata often can't port-forward at all. Production is sandpitd in
-  the cluster dialing pod IPs.
-- **The local store still holds records.** The cluster holds pods, so sandpitd is still a
-  single stateful process.
-- **Dependencies:** client-go v0.37 forces `gorilla/websocket` and `protobuf` onto upstream's
-  untagged pseudo-versions in the shared `go.mod`. All tests pass with them. See decision 4.
+  lowering, which needs `CAP_SYS_RESOURCE`, so every command failed with
+  `echo: I/O error`. Requests now equal limits on every container.
+- **`sandpit-agent` as a container's PID 1** took its VM-init path. It now spots `serve` as
+  PID 1 and only supervises and reaps (`runContainerInit`). `--system-services` starts the
+  image's daemons off vsock.
+- **The agent on TCP needed authentication.** Each stream opens with
+  `AUTH <token>` / `OK` (`agent.TokenListener`), with the token in a Secret the Sandbox owns.
+- **Port-forward is the slow, dev-only path.** gVisor and Kata often can't do it at all, so
+  production means sandpitd in-cluster, dialing pod IPs.
+
+**Substrate:**
+- **Its router carries HTTP only, so there's no agent stream.** Ports are reached with
+  `CONNECT <actor>:<port>` (`ate-target-actor` header, port 8081), and the router refuses
+  upgrades: WebSocket refusal landed in `f2006302`, and raw TCP is unsupported.
+  - `sandpit-agent`'s stream protocol (`Upgrade: tcp`, websocket exec) can't pass.
+  - E2B didn't need it: envd is HTTP (Connect RPC), so the guest is an
+    `engine.PortDialer` and nothing more.
+  - This is the main constraint for the other front ends (phase 2).
+- **The actor rootfs loses the image's metadata** (upstream bug, to report): everything
+  becomes root-owned, `/` is 0700, and setuid, setgid and sticky bits are dropped.
+  - `images/substrate/sandpit-fixperms` replays a list recorded at build time before envd
+    starts, so every golden snapshot is already repaired.
+- **The default capabilities are minimal** (`AUDIT_WRITE`, `KILL`, `NET_BIND_SERVICE`).
+  envd needs `SETUID`/`SETGID` to run commands as the sandbox's user and `CHOWN`/`FOWNER`
+  for files. The template grants a container runtime's usual set; gVisor stays the boundary.
+- **The wakeup probe accepts only 200.** envd's open `/health` returns 204, and `/envs`
+  needs the sandbox's token after `/init`, so the probe failed every resume after the
+  first. The template has no probe, which costs a 20 s warm-up when a template is created,
+  not on resume. Upstream fix: accept 2xx.
+- **Per-sandbox secrets come after start.** Actors start from one golden snapshot per
+  template, and env vars are literal values. envd's `/init` (the engine's boot hook, run on
+  each actor's first resume) already hands each sandbox its token.
+- **Substrate never suspends on its own.** The engine decides, via pause, deadlines or
+  `--idle-suspend`, and the router resumes. That is the split sandpit already has.
+- **Dependencies:**
+  - client-go v0.37 forces `gorilla/websocket` and `protobuf` onto upstream pseudo-versions.
+  - Importing Substrate's `ateapipb` module bumped about 25 more (prometheus, x/crypto, ...).
+    All tests pass, but see decision 4.
 
 ## Capability matrix
 
-What each engine can back, which decides what each front end can promise there.
-
-| Capability | Firecracker (`engine`) | Kubernetes (`kube`) |
-|---|---|---|
-| Isolation | microVM | RuntimeClass: gVisor or Kata (runc is not a sandbox) |
-| Persistent disk | whole ext4 root | a volume on chosen paths (see decision 5) |
-| Warm suspend (memory and processes) | ✅ snapshot | ❌ (only with CRIU or vendor pod snapshots; GKE has them) |
-| Idle suspend, wake on request | ✅ | possible: idle accounting in Acquire/release, then Suspend. Wake is a cold start |
-| Checkpoints and restore | ✅ reflink copies | VolumeSnapshots (CSI): disk only, slower, driver-dependent |
-| Instant clone | ✅ | a PVC from a VolumeSnapshot (`dataSource`) |
-| Create from an OCI image | ✅ converted to ext4 | native: it *is* the pod image. The agent must be in the image, or injected by an init container |
-| Network policy (egress) | ✅ netd and the guest | NetworkPolicy (L3/L4) or SandboxTemplate `networkPolicy`. FQDN rules need Cilium or a proxy |
-| Public URLs | ✅ the URL proxy | the same proxy in sandpitd, which dials the pod. Or Gateway API |
-| Backups to S3 | ✅ incremental | the volume's (Velero or snapshots). Not sandpit's to do |
-| Fast create | reflink plus boot ~1 s | SandboxWarmPool plus SandboxClaim |
-| CPU and memory limits | VM size, with a balloon | requests = limits (they must be: see above) |
+| Capability | Firecracker (`engine`) | Substrate (`substrate`) | agent-sandbox (`kube`) |
+|---|---|---|---|
+| Isolation | microVM | gVisor, or Kata on Cloud Hypervisor (micro-VM workers) | RuntimeClass: gVisor or Kata (runc is not a sandbox) |
+| Warm suspend (memory and processes) | ✅ snapshot | ✅ runsc checkpoint (~100 ms) | ❌ |
+| Wake on request | ✅ | ✅ router resumes, ~120 ms | cold start, seconds |
+| Idle density | suspended VMs cost disk | suspended actors cost object storage only. The project claims up to 30x oversubscription | one pod per sandbox |
+| Filesystem across pause | ✅ whole disk | ✅ whole rootfs (in the snapshot) | the volume's paths only |
+| Durable volumes | the disk | one `durableDir` on gVisor (several on micro-VM), CSI volumes | PVC |
+| Checkpoints and restore | ✅ reflink copies | Tags: a suspend plus `CreateTag`, and actors created from a tag | VolumeSnapshots, disk only |
+| Fast create | reflink plus boot ~1 s | ✅ golden snapshot, ~150 ms | warm pools (SandboxWarmPool) |
+| Guest protocol | vsock, anything | **HTTP only** (CONNECT, no upgrades) | TCP, anything |
+| Egress policy | ✅ netd | EgressPolicy RPCs and an egress gateway (GKE docs say unsupported there; untested) | NetworkPolicy, or a template's `networkPolicy` |
+| Public URLs | ✅ the URL proxy | sandpitd's proxy, dialing through the router | sandpitd's proxy, dialing pod IPs |
+| Runs on | one Linux host with KVM | Kubernetes 1.36+ (beta certificate APIs), Postgres, an object store. Pre-1.0 | any Kubernetes with the CRDs |
+| Control-plane auth | sandpit's | authentication but **no authorization yet**: any accepted token controls every atespace | Kubernetes RBAC |
 
 ## Decisions to make
 
 | # | Question | Recommendation |
 |---|---|---|
-| 1 | New repo or a backend in sandpit? | **A backend in sandpit.** The ~12k lines of API translation are the product. A second repo would mean importing them, which `internal/` forbids, or keeping them in sync by hand. Ship `sandpitd --backend=kube`. A separate `sandpit-kube` image or chart can still be its own artifact |
-| 2 | Where records live | **Phase 1–3: the local store, on a PVC, with sandpitd as one replica.** Phase 4: the cluster (a `SandpitRecord` CRD, or annotations on the Sandbox) so sandpitd is stateless and can run more than one replica |
-| 3 | Isolation target | **gVisor first** (GKE Sandbox, or `runsc` on k3s), Kata second. Refuse to start without `--runtime-class` unless `--insecure-runc` is set |
-| 4 | client-go's dependency bumps | **Accept them.** Avoiding them would mean a hand-written REST client (create, patch, delete, watch, and port-forward), which isn't worth the risk |
-| 5 | What survives a pause | **More than `$HOME`:** the volume also mounted with subPaths on `/tmp`, `/root`, `/usr/local`, `/opt`, `/var/lib` (configurable), so a pause loses only processes and memory. Documented as the kube backend's difference. Revisit with CRIU or pod snapshots in phase 5 |
+| 1 | New repo or a backend in sandpit? | **A backend in sandpit.** The ~12k lines of API translation are the product. `sandpitd --backend=firecracker|substrate|kube` |
+| 2 | Which Kubernetes backend leads? | **Substrate**, because warm pause, wake-on-request and density are what sandpit is. **agent-sandbox** stays as the fallback for clusters that can't run Substrate (older Kubernetes, no Postgres or object store, or a need for non-HTTP guests) |
+| 3 | Where records live | **The local store, with one sandpitd replica, until phase 4.** On Substrate, actors already live in its Postgres, so sandpit's record could shrink to front-end metadata |
+| 4 | Dependencies | **Don't import Substrate's module.** Vendor `ateapi.proto` (Apache-2.0) and generate stubs in sandpit, which drops the ~25 forced bumps. Accept client-go's pins, which are Kubernetes' own |
+| 5 | Non-HTTP guests on Substrate | **Ask upstream first:** raw-TCP CONNECT is on their list of what isn't reachable yet. Meanwhile, give `sandpit-agent` an upgrade-free mode (HTTP/2 or chunked bidirectional streams for exec, no `Upgrade: tcp`) so the Daytona, Vercel, Modal and Sprites front ends can reach it through CONNECT |
+| 6 | Substrate's missing authorization | **Run Substrate per tenant or per sandpit** (its control plane trusts every authenticated caller), so sandpit holds the only credential, until authorization lands |
 
 ## Phases
 
-**Phase 1: E2B on kube, production-shaped.**
-- Run sandpitd in the cluster: Deployment (one replica), RBAC (Sandboxes, Secrets, pods/watch,
-  plus pods/portforward only for dev), a PVC for the store, and a kustomize or Helm chart.
-  `--dial pod-ip` by default.
-- Lock down the agent: a NetworkPolicy so that only sandpitd's pods reach the agent port, and
-  TLS on the agent stream (a per-sandbox certificate, or mTLS from a namespace CA) in place
-  of, or on top of, the token.
-- Validate gVisor and Kata on a real cluster and rerun the probe there: envd, PTY and
-  `oom_score_adj` under `runsc`.
-- Reconcile: watch Sandboxes as well as pods. A record whose Sandbox is gone is either
-  deleted or marked broken. A Sandbox with no record is reaped after a grace period.
-- Make deadlines survive sandpitd being down: set `spec.shutdownTime` and
-  `shutdownPolicy: Delete` for delete deadlines, and reconcile the record when the Sandbox
-  disappears. Run the janitor's suspends concurrently (today they're serial, 5 s each).
-- Implement decision 5 (subPath persistence).
-- Add `docs/kube.md` and a `providers/e2b-differences.md` section for the kube backend.
+**Phase 1: E2B on Substrate, production-shaped.**
+- Generate our own ateapi stubs (decision 4).
+- Run sandpitd in the cluster, talking to `api.ate-system.svc` and the router directly, with
+  a projected service-account token (audience `api.ate-system.svc`) and the CA from the
+  ClusterTrustBundle. No port-forwards.
+- An installer for sandpit's WorkerPool, atespace and ActorTemplate (today these are
+  `images/substrate/*.tmpl`), with the image pinned by digest.
+- Report the rootfs metadata bug and the 2xx wakeup probe upstream. Drop `sandpit-fixperms`
+  and restore the wakeup probe once they're fixed.
+- Handle crashed actors (`RevertActor`) and evictions (the actor's SIGTERM must lead to a
+  suspend within 30 min, so envd needs a handler, or sandpit watches workers draining).
+- Default `--idle-suspend` on, and document that background work pauses with an idle
+  sandbox. The Firecracker engine avoids that by asking the agent about running tasks;
+  here, with no agent, an E2B sandbox's only signal is traffic.
+- Rerun the probe on GKE with Substrate's GKE installer, and on micro-VM workers.
 
 **Phase 2: the other front ends.**
-- Promote `kube.Engine` to everything the four interfaces need: `Stop`, `BeginUse` and
-  `SetPolicy` with real idle accounting, `Events` (export `engine.NewBus` so another engine
-  can own one), `OnDelete`, `Quitting`.
-- Port in the order Modal (smallest), Daytona, then Vercel. Vercel needs checkpoints, which
-  means VolumeSnapshots behind `Create/Delete/Hold/RestoreCheckpoint`. Each gets its probe
-  suite run on kube.
-- Build one guest image per API (`images/kube` takes `USERLAND=`), pushed to a registry.
+- Upgrade-free agent mode (decision 5) and `sandpit-agent` in Substrate guests:
+  `Guest.Dial` becomes CONNECT to the agent's port.
+- Promote both engines to the full front-end interfaces: `Stop`, `BeginUse` and
+  `SetPolicy` with idle accounting, `Events` (export `engine.NewBus`), `OnDelete`,
+  `Quitting`.
+- Port Modal, then Daytona, then Vercel, whose checkpoints become Substrate tags. Each
+  front end's probe suite runs on Substrate, and on agent-sandbox where it can.
 
 **Phase 3: fold into sandpitd.**
-- `daemon.Env.Engine` becomes an interface, and `--backend=firecracker|kube` picks one.
+- `daemon.Env.Engine` becomes an interface, chosen with `--backend`, and
   `cmd/sandpit-kube` goes away.
-- The Sprites API (`internal/server`) is the last and largest piece. Either give it a kube
-  engine for the core lifecycle and refuse the Firecracker-only routes with a clear error,
-  or keep it Firecracker-only for now. Decide once phases 1–2 show how much of it maps.
-- The dashboard shows the backend and pod status.
+- The Sprites API comes last: its core lifecycle maps onto actors and tags, and the
+  Firecracker-only routes (backups, network policy) answer with clear errors until they map.
 
-**Phase 4: stateless sandpitd.** Records move into the cluster (decision 2). Then run more
-than one replica, with per-sandbox locks via Leases or optimistic concurrency on
-resourceVersion.
+**Phase 4: stateless sandpitd** for more than one replica. On Substrate, its Postgres
+already holds the actor state. On agent-sandbox, records move into the cluster.
 
-**Phase 5: speed and fidelity.**
-- Warm pools: SandboxTemplate per API image plus SandboxWarmPool, with create as a
-  SandboxClaim. Targets sub-second creates.
-- Warm pause where the platform has it (GKE pod snapshots, or CRIU via the kubelet
-  checkpoint API), which sets `Boot.Warm` true and closes the pause_resume gap.
+**agent-sandbox track (in parallel, smaller):**
+- Keep the `kube` engine passing the E2B probe.
+- Add a NetworkPolicy that only lets sandpitd reach the agent port, plus TLS on the agent
+  stream.
+- Persist more than `$HOME` across a stop (subPaths on `/tmp`, `/root`, `/usr/local`,
+  `/opt`).
+- Reconcile records against Sandboxes, set `shutdownTime` as a deadline backstop, and add
+  warm pools.
 
-## Running the spike
+## Running the spikes
+
+agent-sandbox:
 
 ```sh
 kind create cluster --name sandpit
@@ -170,8 +181,34 @@ kubectl create namespace sandpit
 go build -o bin/sandpit-kube ./cmd/sandpit-kube
 SANDPIT_TOKEN=dev ./bin/sandpit-kube --context kind-sandpit --image sandpit-kube-e2b:dev \
   --image-pull-policy Never --dial port-forward --disk-size 1Gi
-
-# in another shell: the E2B SDK probe, unmodified
-cd e2e/providers/e2b && E2B_DOMAIN=e2b.localhost E2B_API_URL=http://127.0.0.1:7901 \
-  E2B_SANDBOX_URL=http://127.0.0.1:7901 E2B_PROBE_PORT_SCHEME=http E2B_API_KEY=dev ./run.sh
 ```
+
+Substrate (from a checkout of github.com/agent-substrate/substrate, which needs ko, Go and
+Docker; its scripts build everything from source and run a registry on `localhost:5001`):
+
+```sh
+# in the substrate checkout
+KIND_CLUSTER_NAME=substrate hack/create-kind-cluster.sh
+KIND_CLUSTER_NAME=substrate hack/install-ate-kind.sh --deploy-ate-system --credential-provider='{"name":"k8s.io"}'
+KIND_CLUSTER_NAME=substrate hack/install-ate-kind.sh --deploy-demo-sandbox   # builds ateom-gvisor
+go install ./cmd/kubectl-ate
+
+# in sandpit
+img=$(./scripts/build-substrate-image.sh)
+WORKER_IMAGE=$(kubectl -n ate-demo-sandbox get workerpool sandbox-workerpool -o jsonpath='{.spec.workerImage}') \
+  envsubst < images/substrate/workerpool.yaml.tmpl | kubectl apply -f -
+kubectl ate create atespace sandpit
+IMAGE=$img SNAPSHOTS=gs://ate-snapshots/sandpit/ envsubst < images/substrate/actortemplate.yaml.tmpl \
+  | kubectl ate create actor-template -f -          # golden snapshot in ~30 s
+kubectl get clustertrustbundles -l podcert.ate.dev/canarying=live \
+  -o jsonpath='{range .items[?(@.spec.signerName=="servicedns.podcert.ate.dev/identity")]}{.spec.trustBundle}{end}' > ate-ca.pem
+kubectl -n ate-system create token ate-client --audience api.ate-system.svc --duration 24h > ate-token
+kubectl -n ate-system port-forward svc/api 18443:443 &
+kubectl -n ate-system port-forward svc/atenet-router 18081:8081 &
+SANDPIT_TOKEN=dev ./bin/sandpit-kube --engine substrate --ate-api 127.0.0.1:18443 --ate-ca ate-ca.pem \
+  --ate-token ate-token --ate-router 127.0.0.1:18081 --idle-suspend 30s
+```
+
+Then, for either: `cd e2e/providers/e2b && E2B_DOMAIN=e2b.localhost
+E2B_API_URL=http://127.0.0.1:7901 E2B_SANDBOX_URL=http://127.0.0.1:7901
+E2B_PROBE_PORT_SCHEME=http E2B_API_KEY=dev ./run.sh`.
