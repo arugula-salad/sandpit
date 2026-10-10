@@ -24,7 +24,6 @@ import (
 	"github.com/arugula-salad/sandpit/engine"
 	"github.com/arugula-salad/sandpit/internal/agent"
 	"github.com/arugula-salad/sandpit/internal/store"
-	"github.com/arugula-salad/sandpit/internal/vmm"
 )
 
 const (
@@ -87,19 +86,19 @@ func newFixture(t *testing.T) *fixture {
 			}
 			return false, false
 		}}, st, life, quiet)
-	fx.f.acquire = func(ctx context.Context, rec store.Record) (*vmm.Machine, func(), error) {
+	fx.f.acquire = func(ctx context.Context, rec store.Record) (engine.Guest, func(), error) {
 		fx.mu.Lock()
 		fx.boots++
 		fx.mu.Unlock()
 		return nil, func() {}, nil
 	}
-	fx.f.dialAgent = func(*vmm.Machine) func(context.Context, string, string) (net.Conn, error) {
+	fx.f.dialAgent = func(engine.Guest) func(context.Context, string, string) (net.Conn, error) {
 		return func(ctx context.Context, _, _ string) (net.Conn, error) {
 			var d net.Dialer
 			return d.DialContext(ctx, "tcp", ag.Listener.Addr().String())
 		}
 	}
-	fx.f.dialPort = func(ctx context.Context, _ *vmm.Machine, port string) (net.Conn, error) {
+	fx.f.dialPort = func(ctx context.Context, _ engine.Guest, port string) (net.Conn, error) {
 		if fx.port == nil {
 			return nil, &net.OpError{Op: "dial", Err: io.EOF}
 		}
@@ -713,7 +712,7 @@ func TestPortsAndRoutePaths(t *testing.T) {
 	sub := out["routes"].([]any)[0].(map[string]any)["subdomain"].(string)
 	var dialed []string
 	inner := fx.f.dialPort
-	fx.f.dialPort = func(ctx context.Context, m *vmm.Machine, port string) (net.Conn, error) {
+	fx.f.dialPort = func(ctx context.Context, m engine.Guest, port string) (net.Conn, error) {
 		dialed = append(dialed, port)
 		return inner(ctx, m, port)
 	}

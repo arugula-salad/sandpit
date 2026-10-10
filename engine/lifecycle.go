@@ -347,12 +347,16 @@ func (l *Engine) rt(id string) *runtime {
 // transition in flight (Peek). Callers outside the engine read its fields and
 // ask the VM things through its methods.
 type VMView struct {
-	Busy     bool         // a transition is in flight; Tap and Pid are unknown
-	Tap      string       // "" when not running or without networking
-	Pid      int          // the VMM's; 0 unless running
-	Inflight int          // API requests pinning the sprite awake
-	m        *vmm.Machine // nil unless running; for the methods below only
+	Busy     bool   // a transition is in flight; Tap and Pid are unknown
+	Tap      string // "" when not running or without networking
+	Pid      int    // the VMM's; 0 unless running
+	Inflight int    // API requests pinning the sprite awake
+	m        Guest  // nil unless running; for the methods below only
 }
+
+// GuestView is the view of a sandbox running as g, for an engine other than
+// this one (a Kubernetes backend) to answer Peek with.
+func GuestView(g Guest) VMView { return VMView{m: g} }
 
 // Running says whether the VM was up.
 func (v VMView) Running() bool { return v.m != nil }
@@ -380,9 +384,9 @@ func (l *Engine) Peek(id string) VMView {
 		return v
 	}
 	defer rt.mu.Unlock()
-	v.Tap, v.m = rt.tap, rt.m
-	if rt.m != nil {
-		v.Pid = rt.m.Pid()
+	v.Tap = rt.tap
+	if rt.m != nil { // not v.m = rt.m: a nil *vmm.Machine is a non-nil Guest
+		v.m, v.Pid = rt.m, rt.m.Pid()
 	}
 	return v
 }
@@ -452,7 +456,8 @@ func (l *Engine) vmConfig(sp store.Record, tap string) vmm.Config {
 }
 
 // Acquire makes sure the sprite is running and pins it awake until release is called.
-func (l *Engine) Acquire(ctx context.Context, sp store.Record) (m *vmm.Machine, release func(), err error) {
+// The Guest is the VM (a *vmm.Machine) as a front end reaches it.
+func (l *Engine) Acquire(ctx context.Context, sp store.Record) (g Guest, release func(), err error) {
 	rt := l.rt(sp.ID)
 	rt.mu.Lock()
 	defer rt.mu.Unlock()
@@ -583,7 +588,7 @@ func (l *Engine) bootLocked(ctx context.Context, sp store.Record, rt *runtime) e
 	if mode == "cold" {
 		rt.grantMiB = 0
 	}
-	if err := l.runBootHooks(ctx, Boot{Record: sp, Warm: mode == "warm", Machine: m}); err != nil {
+	if err := l.runBootHooks(ctx, Boot{Record: sp, Warm: mode == "warm", Guest: m}); err != nil {
 		m.Kill()
 		l.returnTap(tap)
 		return fmt.Errorf("preparing the guest: %w", err)
@@ -631,19 +636,8 @@ func consoleTail(dir string) string {
 // socket sandpitd does not pin (a control channel) after the last activity check.
 var errGuestBusy = errors.New("guest became active")
 
-// AgentDial reaches m's guest agent over vsock.
-func AgentDial(m *vmm.Machine) func(context.Context, string, string) (net.Conn, error) {
-	return func(ctx context.Context, _, _ string) (net.Conn, error) { return m.Dial(ctx) }
-}
-
-// AgentTransport carries HTTP to m's guest agent, a fresh vsock stream per
-// request: there is nothing to keep alive across a suspend.
-func AgentTransport(m *vmm.Machine) *http.Transport {
-	return &http.Transport{DisableKeepAlives: true, DialContext: AgentDial(m)}
-}
-
-// agentCall makes one HTTP request to the guest agent over a fresh vsock stream.
-func agentCall(ctx context.Context, m *vmm.Machine, method, path string, body any, out any) error {
+// agentCall makes one HTTP request to the guest agent over a fresh stream.
+func agentCall(ctx context.Context, m Guest, method, path string, body any, out any) error {
 	var rd io.Reader
 	if body != nil {
 		b, _ := json.Marshal(body)

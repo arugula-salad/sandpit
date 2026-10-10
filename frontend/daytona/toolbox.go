@@ -12,8 +12,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/arugula-salad/sandpit/engine"
 	"github.com/arugula-salad/sandpit/internal/store"
-	"github.com/arugula-salad/sandpit/internal/vmm"
 )
 
 // The toolbox: the API Daytona's SDKs reach inside a sandbox, at
@@ -26,7 +26,7 @@ import (
 type box struct {
 	rec  store.Record
 	m    meta
-	mach *vmm.Machine
+	mach engine.Guest
 }
 
 type toolboxHandler func(http.ResponseWriter, *http.Request, *box)

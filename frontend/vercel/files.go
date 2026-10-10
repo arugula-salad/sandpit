@@ -12,8 +12,8 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/arugula-salad/sandpit/engine"
 	"github.com/arugula-salad/sandpit/internal/store"
-	"github.com/arugula-salad/sandpit/internal/vmm"
 )
 
 // Files: fs/write takes a gzip-compressed tar and extracts it under x-cwd;
@@ -76,7 +76,7 @@ func (e badArchive) Error() string { return "the body must be a gzip-compressed 
 // directories and symlinks with one command afterwards. Entry names are
 // relative to base (the SDKs make them so); one that climbs out of base with
 // .. stays inside it, as tar's own extraction keeps it.
-func (f *Frontend) extract(ctx context.Context, m *vmm.Machine, base string, body io.Reader) error {
+func (f *Frontend) extract(ctx context.Context, m engine.Guest, base string, body io.Reader) error {
 	zr, err := gzip.NewReader(body)
 	if err != nil {
 		return badArchive{err}

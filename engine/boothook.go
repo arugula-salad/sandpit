@@ -4,7 +4,6 @@ import (
 	"context"
 
 	"github.com/arugula-salad/sandpit/internal/store"
-	"github.com/arugula-salad/sandpit/internal/vmm"
 )
 
 // Boot is a VM that has just started for a sandbox, as a boot hook sees it:
@@ -18,8 +17,8 @@ type Boot struct {
 	// checkpoint restore is, and what a wake becomes when its snapshot could
 	// not be used.
 	Warm bool
-	// Machine is the VM, for DialPort. It is only the hook's until it returns.
-	Machine *vmm.Machine
+	// Guest is the VM, for DialPort. It is only the hook's until it returns.
+	Guest Guest
 }
 
 // A BootHook prepares a guest a front end runs a service of its own in (E2B's
@@ -36,7 +35,7 @@ type BootHook func(ctx context.Context, b Boot) error
 //
 // f runs holding the sandbox's transition lock, so it must not call an Engine
 // method that takes it (Acquire, Suspend, Delete, the deadline and policy
-// setters, ...). It may dial the guest (DialPort on b.Machine) and read the
+// setters, ...). It may dial the guest (DialPort on b.Guest) and read the
 // store. ctx bounds the whole start. An error fails the start: the VM is
 // killed and Acquire returns the error, so a hook that can live without its
 // work (a warm resume whose state survived) logs and returns nil instead.

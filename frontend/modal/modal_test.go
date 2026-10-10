@@ -26,7 +26,6 @@ import (
 	"github.com/arugula-salad/sandpit/engine"
 	"github.com/arugula-salad/sandpit/frontend/modal/modalpb"
 	"github.com/arugula-salad/sandpit/internal/store"
-	"github.com/arugula-salad/sandpit/internal/vmm"
 )
 
 const (
@@ -114,7 +113,7 @@ func (fx *fixture) start(disk string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	f.acquire = func(ctx context.Context, rec store.Record) (*vmm.Machine, func(), error) {
+	f.acquire = func(ctx context.Context, rec store.Record) (engine.Guest, func(), error) {
 		return nil, func() {}, nil
 	}
 	f.run = fx.fakeRun

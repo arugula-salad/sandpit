@@ -13,7 +13,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/arugula-salad/sandpit/internal/vmm"
+	"github.com/arugula-salad/sandpit/engine"
 	"github.com/gorilla/websocket"
 )
 
@@ -40,13 +40,13 @@ func (e *agentError) Error() string { return e.msg }
 
 // httpClient carries requests to mach's sandpit-agent, a fresh stream per
 // request as the engine's own agent calls are.
-func (f *Frontend) httpClient(mach *vmm.Machine) *http.Client {
+func (f *Frontend) httpClient(mach engine.Guest) *http.Client {
 	return &http.Client{Transport: &http.Transport{DisableKeepAlives: true, DisableCompression: true, DialContext: f.agentDial(mach)}}
 }
 
 // agentDo makes one request to the agent and returns its response when it
 // succeeded, or an *agentError.
-func (f *Frontend) agentDo(ctx context.Context, mach *vmm.Machine, method, path string, q url.Values, body io.Reader) (*http.Response, error) {
+func (f *Frontend) agentDo(ctx context.Context, mach engine.Guest, method, path string, q url.Values, body io.Reader) (*http.Response, error) {
 	u := "http://agent" + path
 	if len(q) > 0 {
 		u += "?" + q.Encode()
@@ -81,7 +81,7 @@ func (f *Frontend) agentDo(ctx context.Context, mach *vmm.Machine, method, path 
 }
 
 // agentJSON makes a request with an optional JSON body and decodes the answer into out.
-func (f *Frontend) agentJSON(ctx context.Context, mach *vmm.Machine, method, path string, q url.Values, body, out any) error {
+func (f *Frontend) agentJSON(ctx context.Context, mach engine.Guest, method, path string, q url.Values, body, out any) error {
 	var rd io.Reader
 	if body != nil {
 		b, _ := json.Marshal(body)
@@ -119,7 +119,7 @@ type execConn struct {
 }
 
 // startExec starts a command in the guest over the agent's exec WebSocket.
-func (f *Frontend) startExec(ctx context.Context, mach *vmm.Machine, spec execSpec) (*execConn, error) {
+func (f *Frontend) startExec(ctx context.Context, mach engine.Guest, spec execSpec) (*execConn, error) {
 	q := url.Values{"cmd": spec.Cmd, "stdin": {fmt.Sprint(spec.Stdin)}}
 	if len(spec.Env) > 0 {
 		q["env"] = spec.Env

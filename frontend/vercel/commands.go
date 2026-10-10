@@ -11,8 +11,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/arugula-salad/sandpit/engine"
 	"github.com/arugula-salad/sandpit/internal/store"
-	"github.com/arugula-salad/sandpit/internal/vmm"
 )
 
 // Commands: Vercel's command API on sandpit-agent's exec sessions. A command is
@@ -37,7 +37,7 @@ type command struct {
 	RecordID  string
 	StartedAt int64
 
-	mach    *vmm.Machine
+	mach    engine.Guest
 	agentID string
 	proc    *guestProc
 

@@ -22,7 +22,6 @@ import (
 	"time"
 
 	"github.com/arugula-salad/sandpit/engine"
-	"github.com/arugula-salad/sandpit/internal/vmm"
 )
 
 // The envd plane: everything the SDK sends to a sandbox rather than to the
@@ -366,9 +365,9 @@ type dialFunc func(ctx context.Context, port string) (net.Conn, error)
 
 // envdDialer is how a VM's ports are reached: the engine's port dial, but a
 // field of the Frontend so that tests can stand in for a guest.
-type envdDialer func(m *vmm.Machine) dialFunc
+type envdDialer func(m engine.Guest) dialFunc
 
-func machineDialer(m *vmm.Machine) dialFunc {
+func machineDialer(m engine.Guest) dialFunc {
 	return func(ctx context.Context, port string) (net.Conn, error) { return engine.DialPort(ctx, m, port) }
 }
 
@@ -463,7 +462,7 @@ func (f *Frontend) initEnvd(ctx context.Context, b engine.Boot) error {
 	for k, v := range m.EnvVars {
 		env[k] = v
 	}
-	dial := f.dialEnvd(b.Machine)
+	dial := f.dialEnvd(b.Guest)
 	start := time.Now()
 	var err error
 retry:

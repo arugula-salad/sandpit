@@ -50,7 +50,6 @@ import (
 	"github.com/arugula-salad/sandpit/engine"
 	"github.com/arugula-salad/sandpit/frontend/modal/modalpb"
 	"github.com/arugula-salad/sandpit/internal/store"
-	"github.com/arugula-salad/sandpit/internal/vmm"
 )
 
 // API is the Record.API of a Modal sandbox, and the Record.Ext key its metadata is under.
@@ -93,11 +92,23 @@ type Options struct {
 	MaxSandboxes int
 }
 
+// Engine is what this front end needs of an engine: sandpit's own
+// (*engine.Engine, Firecracker VMs) or another that runs sandboxes elsewhere.
+type Engine interface {
+	Create(ctx context.Context, spec engine.CreateSpec) (store.Sprite, error)
+	Delete(rec store.Record) error
+	Acquire(ctx context.Context, rec store.Record) (engine.Guest, func(), error)
+	Quitting() bool
+	OnDelete(f func(store.Sprite))
+}
+
+var _ Engine = (*engine.Engine)(nil)
+
 // Frontend is the Modal API on an engine.
 type Frontend struct {
 	opts  Options
 	store *store.Store
-	life  *engine.Engine
+	life  Engine
 	log   *slog.Logger
 	state *state
 	// key signs the router JWTs. It is new in every process: a client holding
@@ -111,13 +122,13 @@ type Frontend struct {
 
 	// acquire and run stand in for the engine's Acquire and sandpit-agent's exec
 	// in tests.
-	acquire func(context.Context, store.Record) (*vmm.Machine, func(), error)
+	acquire func(context.Context, store.Record) (engine.Guest, func(), error)
 	run     runner
 }
 
 // New attaches the Modal front end to life: it registers an OnDelete hook, so
 // call it once per engine, before anything is served.
-func New(opts Options, st *store.Store, life *engine.Engine, log *slog.Logger) (*Frontend, error) {
+func New(opts Options, st *store.Store, life Engine, log *slog.Logger) (*Frontend, error) {
 	if opts.MaxTimeout <= 0 {
 		opts.MaxTimeout = 24 * time.Hour
 	}

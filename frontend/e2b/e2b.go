@@ -33,7 +33,6 @@ import (
 
 	"github.com/arugula-salad/sandpit/engine"
 	"github.com/arugula-salad/sandpit/internal/store"
-	"github.com/arugula-salad/sandpit/internal/vmm"
 )
 
 // API is the Record.API of an E2B sandbox, and the Record.Ext key its metadata is under.
@@ -87,11 +86,27 @@ type Options struct {
 	MaxSandboxes int
 }
 
+// Engine is what this front end needs of an engine: sandpit's own
+// (*engine.Engine, Firecracker VMs) or another that runs sandboxes elsewhere
+// (kube.Engine, Kubernetes agent-sandbox pods).
+type Engine interface {
+	Create(ctx context.Context, spec engine.CreateSpec) (store.Sprite, error)
+	Delete(rec store.Record) error
+	Acquire(ctx context.Context, rec store.Record) (engine.Guest, func(), error)
+	Suspend(rec store.Record) error
+	Cool(rec store.Record) bool
+	Peek(id string) engine.VMView
+	SetDeadline(id string, at *time.Time, action store.DeadlineAction) (store.Record, error)
+	OnBoot(f engine.BootHook)
+}
+
+var _ Engine = (*engine.Engine)(nil)
+
 // Frontend is the E2B API on an engine.
 type Frontend struct {
 	opts   Options
 	store  *store.Store
-	life   *engine.Engine
+	life   Engine
 	log    *slog.Logger
 	diskMB int // the template's disk, for diskSizeMB
 
@@ -103,14 +118,14 @@ type Frontend struct {
 	// acquire starts a sandbox's VM if it is not running and holds it until
 	// release (the engine's Acquire), and dialEnvd reaches a VM's ports (the
 	// engine's port dial): fields so that tests can stand in for a VM.
-	acquire  func(context.Context, store.Record) (*vmm.Machine, func(), error)
+	acquire  func(context.Context, store.Record) (engine.Guest, func(), error)
 	dialEnvd envdDialer
 }
 
 // New attaches the E2B front end to life: it registers the boot hook that
 // initializes envd, so call it before anything boots (before the daemon
 // serves any API).
-func New(opts Options, st *store.Store, life *engine.Engine, log *slog.Logger) *Frontend {
+func New(opts Options, st *store.Store, life Engine, log *slog.Logger) *Frontend {
 	if opts.MaxTimeout <= 0 {
 		opts.MaxTimeout = 24 * time.Hour
 	}
