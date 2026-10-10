@@ -85,20 +85,6 @@ func (e *Engine) SetNetworkPolicy(string, []store.NetworkRule, *netpolicy.Policy
 
 func (e *Engine) RepublishNetworkPolicy(string) {}
 
-func (e *Engine) CreateCheckpoint(store.Record, *engine.GuestChan, string, engine.Progress) (store.Checkpoint, error) {
-	return store.Checkpoint{}, engine.ErrUnsupported
-}
-
-func (e *Engine) DeleteCheckpoint(store.Record, string) error { return engine.ErrUnsupported }
-
-func (e *Engine) HoldCheckpoint(store.Record, string) (store.Record, string, func(), error) {
-	return store.Record{}, "", nil, engine.ErrUnsupported
-}
-
-func (e *Engine) RestoreCheckpoint(store.Record, *engine.GuestChan, string, engine.Progress, func()) error {
-	return engine.ErrUnsupported
-}
-
 func (e *Engine) MountCheckpoint(context.Context, store.Record, *engine.GuestChan, string) (int, error) {
 	return 0, engine.ErrUnsupported
 }
