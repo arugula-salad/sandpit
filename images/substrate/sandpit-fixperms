@@ -8,6 +8,10 @@
 # every actor starts repaired.
 set -u
 chmod 755 /
+# Agent Substrate gives the actor an empty /etc/hosts, so "localhost" doesn't
+# resolve (glibc's getaddrinfo, Go): put back what every Linux has.
+grep -qE '^[^#]*[[:space:]]localhost([[:space:]]|$)' /etc/hosts 2>/dev/null ||
+  printf '127.0.0.1\tlocalhost\n::1\tlocalhost ip6-localhost ip6-loopback\n' >> /etc/hosts
 while read -r uid gid mode path; do
   chown -h "$uid:$gid" "$path" 2>/dev/null
   [ -L "$path" ] || chmod "$mode" "$path" 2>/dev/null

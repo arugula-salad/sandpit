@@ -13,11 +13,22 @@ import (
 )
 
 func dialTarget(host string, port int) (net.Conn, string, error) {
-	if host == "" {
-		host = "localhost"
-	}
 	if port < 1 || port > 65535 {
 		return nil, "", fmt.Errorf("invalid port %d", port)
+	}
+	if host == "" {
+		// The guest's own port, by address rather than "localhost": a guest
+		// with no localhost in /etc/hosts (an Agent Substrate actor) can't
+		// resolve it. IPv4 first, as most servers bind it, then IPv6.
+		target := net.JoinHostPort("127.0.0.1", strconv.Itoa(port))
+		c, err := net.DialTimeout("tcp", target, 5*time.Second)
+		if err == nil {
+			return c, target, nil
+		}
+		if c6, err6 := net.DialTimeout("tcp", net.JoinHostPort("::1", strconv.Itoa(port)), 5*time.Second); err6 == nil {
+			return c6, net.JoinHostPort("::1", strconv.Itoa(port)), nil
+		}
+		return nil, target, err
 	}
 	target := net.JoinHostPort(host, strconv.Itoa(port))
 	c, err := net.DialTimeout("tcp", target, 5*time.Second)
