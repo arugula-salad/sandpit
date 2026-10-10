@@ -30,6 +30,13 @@ func DialPort(ctx context.Context, m Guest, port string) (net.Conn, error) {
 	if pd, ok := m.(PortDialer); ok {
 		return pd.DialPort(ctx, port)
 	}
+	return AgentDialPort(ctx, m, port)
+}
+
+// AgentDialPort is DialPort through the guest's agent, whatever else the
+// guest can do: a guest that is a PortDialer for some sandboxes and has an
+// agent in others (substrate.Engine's) uses it for the latter.
+func AgentDialPort(ctx context.Context, m Guest, port string) (net.Conn, error) {
 	// Only a port number, or "http" (the agent's name for the sandbox's own HTTP
 	// service), goes into the agent's request: anything else would be spliced
 	// into its query string, where it could name another host to dial.

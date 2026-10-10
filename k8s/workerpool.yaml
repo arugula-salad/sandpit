@@ -1,7 +1,7 @@
 # The warm gVisor workers sandpit's actors are restored onto. Each holds its limits whether
 # or not an actor is on it. home-cloud admits a WorkerPool only with the
 # home-cloud/agent-substrate nodeSelector (geek and basil). workerImage is home-cloud's build
-# of Substrate's ateom-gvisor, matching its installed version (platform/agent-substrate/
+# of Substrate's ateom-gvisor with runsc --allow-suid (sudo), matching its installed version (platform/agent-substrate/
 # upstream/images.env).
 apiVersion: ate.dev/v1alpha1
 kind: WorkerPool
@@ -12,7 +12,7 @@ metadata:
 spec:
   replicas: 2
   sandboxClass: gvisor
-  workerImage: git.inevitable.fyi/jhgaylor/substrate/ateom-gvisor:v0.4.0@sha256:a85055188241fb4ef6c59d7cd841c8855bc1204ffae5a3c187ba3b24395c13a6
+  workerImage: git.inevitable.fyi/jhgaylor/substrate/ateom-gvisor:v0.4.0-hc1@sha256:6322d82a94410f92f56aa39d8948a5213a321ba44730deecd7c2a7141fc81caf
   template:
     nodeSelector:
       home-cloud/agent-substrate: "true"
