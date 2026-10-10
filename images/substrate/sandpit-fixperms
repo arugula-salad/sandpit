@@ -1,0 +1,13 @@
+#!/bin/sh
+# The actor's entrypoint: puts back what Agent Substrate's rootfs loses of the
+# image (every file root-owned, / at 0700, no setuid, setgid or sticky bits), from
+# the list the image recorded when it was built (Containerfile), then runs envd.
+# It runs once, as root, before the template's golden snapshot is taken, so
+# every actor starts repaired.
+set -u
+chmod 755 /
+while read -r uid gid mode path; do
+  chown -h "$uid:$gid" "$path" 2>/dev/null
+  [ -L "$path" ] || chmod "$mode" "$path" 2>/dev/null
+done < /etc/sandpit/image-perms
+exec /usr/bin/envd -isnotfc -port 49983 -no-cgroups

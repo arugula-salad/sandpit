@@ -24,7 +24,12 @@ func (c *bufferedConn) Read(p []byte) (int, error) { return c.r.Read(p) }
 // port is a number, or "http" for the sprite's URL target (its HTTP service,
 // else 8080). m is a VM Acquire returned, held for as long as the stream is
 // used; a boot hook (OnBoot) may dial the VM it is given.
+//
+// A guest that is a PortDialer is asked instead, with the port as given.
 func DialPort(ctx context.Context, m Guest, port string) (net.Conn, error) {
+	if pd, ok := m.(PortDialer); ok {
+		return pd.DialPort(ctx, port)
+	}
 	// Only a port number, or "http" (the agent's name for the sandbox's own HTTP
 	// service), goes into the agent's request: anything else would be spliced
 	// into its query string, where it could name another host to dial.

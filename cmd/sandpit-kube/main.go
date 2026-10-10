@@ -1,6 +1,8 @@
 // sandpit-kube is the spike of sandpit on Kubernetes: the E2B API (the same
 // front end sandpitd serves) on the kube engine, whose sandboxes are
-// agent-sandbox Sandboxes rather than Firecracker VMs. The official E2B SDKs
+// agent-sandbox Sandboxes rather than Firecracker VMs, or (--engine
+// substrate) on the substrate engine, whose sandboxes are Agent Substrate
+// actors that suspend and resume warm. The official E2B SDKs
 // work against it unmodified. docs/plans/kubernetes-backend.md is the plan
 // that would fold this into sandpitd (--backend=kube) for every API.
 //
@@ -17,6 +19,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"flag"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -32,6 +35,7 @@ import (
 	"github.com/arugula-salad/sandpit/frontend/e2b"
 	"github.com/arugula-salad/sandpit/internal/store"
 	"github.com/arugula-salad/sandpit/kube"
+	"github.com/arugula-salad/sandpit/substrate"
 )
 
 func main() {
@@ -53,6 +57,15 @@ func main() {
 		cpus        = flag.Int("cpus", 2, "CPUs per sandbox (request and limit)")
 		mem         = flag.Int("mem", 512, "memory per sandbox, MiB (request and limit)")
 		maxTimeout  = flag.Duration("e2b-max-timeout", 24*time.Hour, "longest timeout a sandbox may be given")
+
+		engineName  = flag.String("engine", "kube", "kube (agent-sandbox Sandboxes) or substrate (Agent Substrate actors)")
+		ateAPI      = flag.String("ate-api", "127.0.0.1:8443", "substrate: ate-api-server's gRPC address")
+		ateCA       = flag.String("ate-ca", "", "substrate: CA file for ate-api's certificate")
+		ateToken    = flag.String("ate-token", "", "substrate: file holding a bearer token ate-api accepts")
+		ateRouter   = flag.String("ate-router", "127.0.0.1:8081", "substrate: atenet-router's CONNECT listener")
+		atespace    = flag.String("atespace", "sandpit", "substrate: atespace the actors are made in")
+		ateTemplate = flag.String("template", "e2b", "substrate: the ActorTemplate actors are made from (images/substrate)")
+		idleSuspend = flag.Duration("idle-suspend", 0, "substrate: suspend a sandbox idle this long, warm; the next request resumes it (0: never)")
 	)
 	flag.Parse()
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
@@ -60,7 +73,7 @@ func main() {
 		log.Error(msg, "err", err)
 		os.Exit(1)
 	}
-	if *image == "" {
+	if *image == "" && *engineName == "kube" {
 		fatal("flags", errors.New("--image is required"))
 	}
 	if *domain == "" {
@@ -83,9 +96,21 @@ func main() {
 		fatal("token", err)
 	}
 
-	eng, err := kube.New(kube.Options{Namespace: *namespace, Image: *image, ImagePullPolicy: corev1.PullPolicy(*pull),
-		RuntimeClass: *runtimeCls, Dial: *dial, PersistPath: *persist, DiskSize: *diskSize, StorageClass: *storageCls},
-		cfg, st, log)
+	var eng interface {
+		e2b.Engine
+		Shutdown()
+	}
+	switch *engineName {
+	case "kube":
+		eng, err = kube.New(kube.Options{Namespace: *namespace, Image: *image, ImagePullPolicy: corev1.PullPolicy(*pull),
+			RuntimeClass: *runtimeCls, Dial: *dial, PersistPath: *persist, DiskSize: *diskSize, StorageClass: *storageCls},
+			cfg, st, log)
+	case "substrate":
+		eng, err = substrate.New(substrate.Options{API: *ateAPI, CAFile: *ateCA, TokenFile: *ateToken, Router: *ateRouter,
+			Atespace: *atespace, Template: *ateTemplate, IdleSuspend: *idleSuspend}, st, log)
+	default:
+		err = fmt.Errorf("unknown --engine %q", *engineName)
+	}
 	if err != nil {
 		fatal("engine", err)
 	}
@@ -104,7 +129,7 @@ func main() {
 		<-sig
 		srv.Close()
 	}()
-	log.Info("serving the E2B API on Kubernetes", "listen", *listen, "domain", *domain, "namespace", *namespace,
+	log.Info("serving the E2B API on Kubernetes", "engine", *engineName, "listen", *listen, "domain", *domain, "namespace", *namespace,
 		"image", *image, "runtime_class", *runtimeCls, "dial", *dial)
 	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		fatal("serve", err)

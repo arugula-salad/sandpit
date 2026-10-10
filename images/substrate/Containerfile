@@ -1,0 +1,16 @@
+# A guest image for the substrate engine (substrate/, sandpit-kube --engine
+# substrate): the E2B userland with E2B's envd as the actor's one process. No
+# sandpit-agent: Agent Substrate's router carries only HTTP to an actor's ports
+# (HTTP CONNECT, no upgrades), which envd speaks and the agent's streams do not.
+# The ActorTemplate's golden snapshot is taken with envd up and uninitialized;
+# the engine's boot hook hands each actor its own token on its first resume.
+# envd is started by sandpit-fixperms, which first repairs the rootfs.
+# Build and push with scripts/build-substrate-image.sh.
+ARG USERLAND=sandpit-e2b:dev
+FROM ${USERLAND}
+# Substrate's rootfs drops ownership and special mode bits (sandpit-fixperms puts
+# them back): record every file that is not root's or has one, as built.
+RUN mkdir -p /etc/sandpit && find / -xdev \( ! -uid 0 -o ! -gid 0 -o -perm /7000 \) \
+      -printf '%U %G %m %p\n' > /etc/sandpit/image-perms
+COPY --chmod=0755 sandpit-fixperms /usr/local/sbin/sandpit-fixperms
+ENTRYPOINT ["/usr/local/sbin/sandpit-fixperms"]

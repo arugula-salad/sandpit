@@ -16,6 +16,14 @@ type Guest interface {
 	Dial(ctx context.Context) (net.Conn, error)
 }
 
+// A PortDialer is a Guest that reaches the sandbox's ports itself, rather
+// than through its agent's tunnel: one whose platform routes to them (Agent
+// Substrate's router, whose HTTP CONNECT names an actor's port). DialPort
+// uses it when a guest is one.
+type PortDialer interface {
+	DialPort(ctx context.Context, port string) (net.Conn, error)
+}
+
 // AgentDial reaches g's guest agent.
 func AgentDial(g Guest) func(context.Context, string, string) (net.Conn, error) {
 	return func(ctx context.Context, _, _ string) (net.Conn, error) { return g.Dial(ctx) }
