@@ -1,0 +1,146 @@
+# sandpitd with --backend substrate: the same daemon as geek's wisp (keys, the four APIs), its
+# sandboxes Agent Substrate actors. It talks to Substrate inside the cluster: ate-api at
+# api.ate-system.svc with a projected token for its audience (re-read on every call, so
+# rotation is free) and the service-DNS signer's CA from its ClusterTrustBundle, and the
+# router's CONNECT listener directly. One replica: records and keys are in its data
+# directory (/data) until phase 4.
+#
+# Keys: the root token is SANDPIT_TOKEN from Infisical, written to /data/token on every
+# start. Per-person keys, over the operator socket:
+#   kubectl -n sandpit exec deploy/sandpitd -- /sandpitd keys create <name> --scope admin|read --data /data
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: sandpitd
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: sandpitd-data
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: longhorn
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sandpitd
+  annotations:
+    secrets.infisical.com/auto-reload: "true"
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: sandpitd
+  template:
+    metadata:
+      labels:
+        app: sandpitd
+    spec:
+      serviceAccountName: sandpitd
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        # distroless's nonroot, by number: Kubernetes can't check a named user is non-root.
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        # sandpitd's root token is <data>/token; make it the one in Infisical.
+        - name: root-token
+          image: docker.io/library/busybox:1.37
+          command: [sh, -c, 'printf "%s\n" "$SANDPIT_TOKEN" > /data/token && chmod 600 /data/token']
+          env:
+            - name: SANDPIT_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: sandpit-token
+                  key: SANDPIT_TOKEN
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - {name: data, mountPath: /data}
+      containers:
+        - name: sandpitd
+          image: sandpit-kube
+          command: [/sandpitd]
+          args:
+            - --backend=substrate
+            - --data=/data
+            - --listen=0.0.0.0:7900
+            - --e2b-listen=0.0.0.0:7901
+            - --e2b-public-url=https://e2b.substrate.inevitable.fyi
+            - --ate-ca=/run/ate/ca.pem
+            - --ate-token=/run/ate/token
+            - --atespace=sandpit
+            - --template=e2b
+            - --template-file=/etc/sandpit/actortemplate.yaml
+          ports:
+            - {name: sprites, containerPort: 7900}
+            - {name: e2b, containerPort: 7901}
+          # The first start waits for the template's golden snapshot before it listens.
+          startupProbe:
+            tcpSocket:
+              port: e2b
+            periodSeconds: 5
+            failureThreshold: 120
+          readinessProbe:
+            tcpSocket:
+              port: e2b
+            periodSeconds: 10
+          resources:
+            requests: {cpu: 50m, memory: 64Mi}
+            limits: {memory: 512Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - {name: data, mountPath: /data}
+            - {name: ate, mountPath: /run/ate, readOnly: true}
+            - {name: template, mountPath: /etc/sandpit, readOnly: true}
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: sandpitd-data
+        - name: tmp
+          emptyDir: {}
+        - name: template
+          configMap:
+            name: sandpit-actortemplate
+        - name: ate
+          projected:
+            sources:
+              - serviceAccountToken:
+                  audience: api.ate-system.svc
+                  expirationSeconds: 3600
+                  path: token
+              - clusterTrustBundle:
+                  signerName: servicedns.podcert.ate.dev/identity
+                  labelSelector:
+                    matchLabels:
+                      podcert.ate.dev/canarying: live
+                  path: ca.pem
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sandpitd
+spec:
+  selector:
+    app: sandpitd
+  ports:
+    - {name: sprites, port: 7900, targetPort: sprites}
+    - {name: e2b, port: 7901, targetPort: e2b}

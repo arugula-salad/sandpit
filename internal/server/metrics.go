@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/arugula-salad/sandpit/engine"
 )
 
 // The web UI's history: a sampler keeps the last hour of host and per-sprite
@@ -157,8 +159,11 @@ func (m *metrics) sample(now time.Time) {
 	}
 	p.HostMemTotal, p.HostMemUsed = readMeminfo()
 	p.Load1 = readLoad1()
-	if h, err := l.Volume(); err == nil {
-		p.VolumeTotal, p.VolumeUsed = h.VolumeTotal, h.VolumeTotal-h.VolumeFree
+	// The data volume is the Firecracker engine's; another backend has none here.
+	if fc, ok := l.(*engine.Engine); ok {
+		if h, err := fc.Volume(); err == nil {
+			p.VolumeTotal, p.VolumeUsed = h.VolumeTotal, h.VolumeTotal-h.VolumeFree
+		}
 	}
 
 	// Refresh disk figures on their own clock, and whenever the set of sprites

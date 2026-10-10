@@ -1,5 +1,5 @@
 # The E2B guest (images/substrate) as an ActorTemplate, the protojson shape
-# `kubectl ate create actor-template -f` takes, for Substrate v0.4.0. sandpit-kube makes it
+# `kubectl ate create actor-template -f` takes, for Substrate v0.4.0. sandpitd makes it
 # (--template-file) as e2b-<hash of this file>. Snapshots go to home-cloud's Garage bucket
 # agent-substrate (the gs:// scheme is Substrate's, whatever the backend).
 workerSelector:

@@ -1,4 +1,4 @@
-# Builds sandpit-kube and the E2B guest for the substrate engine, pushes them to
+# Builds sandpitd (with sandpit-kube) and the E2B guest for the substrate engine, pushes them to
 # ghcr.io/arugula-salad/{sandpit-kube,sandpit-e2b-guest} and pins both digests into k8s/,
 # which is how Flux (arugula-salad/fleet) rolls home-cloud's in-cluster sandpit onto them.
 # amd64 only: every home-cloud node is.
@@ -12,10 +12,11 @@ on:
   pull_request:
     paths:
       - "cmd/sandpit-kube/**"
+      - "cmd/sandpitd/**"
+      - "internal/**"
+      - "frontend/**"
       - "substrate/**"
-      - "e2b/**"
       - "engine/**"
-      - "internal/store/**"
       - "images/e2b/**"
       - "images/substrate/**"
       - "images/sandpit-kube/**"
@@ -27,10 +28,11 @@ on:
     branches: [main]
     paths:
       - "cmd/sandpit-kube/**"
+      - "cmd/sandpitd/**"
+      - "internal/**"
+      - "frontend/**"
       - "substrate/**"
-      - "e2b/**"
       - "engine/**"
-      - "internal/store/**"
       - "images/e2b/**"
       - "images/substrate/**"
       - "images/sandpit-kube/**"

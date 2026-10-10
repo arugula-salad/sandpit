@@ -1,9 +1,9 @@
-# sandpit-kube on Agent Substrate in home-cloud (docs/plans/kubernetes-backend.md, phase 1):
+# sandpitd --backend substrate in home-cloud (docs/plans/kubernetes-backend.md, phase 1):
 # the E2B API at e2b.substrate.inevitable.fyi, its sandboxes as Substrate actors on gVisor
 # workers. Applied by arugula-salad/fleet (clusters/home/apps/sandpit.yaml). Substrate itself
 # is home-cloud's platform/agent-substrate.
 #
-# The image digests here (sandpit-kube below, the guest in actortemplate.yaml) are pinned by
+# The image digests here (sandpit-kube below, which holds sandpitd, the guest in actortemplate.yaml) are pinned by
 # .github/workflows/substrate-images.yml.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
@@ -12,11 +12,11 @@ resources:
   - namespace.yaml
   - workerpool.yaml
   - infisical.yaml
-  - sandpit-kube.yaml
+  - sandpitd.yaml
   - ingress.yaml
 configMapGenerator:
   # A new guest image is a new file, so a new ConfigMap, a rolled Deployment, and a new
-  # ActorTemplate (sandpit-kube names it after the file's hash).
+  # ActorTemplate (sandpitd names it after the file's hash).
   - name: sandpit-actortemplate
     files:
       - actortemplate.yaml

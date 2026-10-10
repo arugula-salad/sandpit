@@ -26,7 +26,7 @@ spec:
     - match: Host(`e2b.substrate.inevitable.fyi`) || HostRegexp(`^[a-z0-9-]+\.e2b\.substrate\.inevitable\.fyi$`)
       kind: Rule
       services:
-        - name: sandpit-kube
+        - name: sandpitd
           port: 7901
   tls:
     secretName: sandpit-e2b-tls

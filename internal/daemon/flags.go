@@ -13,6 +13,7 @@ import (
 	"github.com/arugula-salad/sandpit/internal/certs"
 	"github.com/arugula-salad/sandpit/internal/confine"
 	"github.com/arugula-salad/sandpit/internal/server"
+	"github.com/arugula-salad/sandpit/substrate"
 )
 
 // Flags are the flags Run wires up itself: the data directory, the
@@ -38,6 +39,11 @@ type Flags struct {
 	// proxied is the Sprites API's public URL behind a reverse proxy
 	// (BehindProxy); nil without one.
 	proxied *url.URL
+
+	// backend is what runs the sandboxes: firecracker (this host) or
+	// substrate (Agent Substrate, whose options are ate).
+	backend string
+	ate     substrate.Options
 }
 
 // Bind registers the daemon's flags on fs; a daemon that has flags of its
@@ -49,6 +55,16 @@ func Bind(fs *flag.FlagSet) (finish func() (server.Options, *Flags)) {
 	f := &Flags{}
 	flag := fs // the definitions below read as they did on the global set
 	flag.StringVar(&f.data, "data", DefaultDataDir(), "data directory")
+	flag.StringVar(&f.backend, "backend", "firecracker", "what runs the sandboxes: firecracker (microVMs on this host) or substrate (actors on Agent Substrate, the --ate-* flags; nothing Firecracker needs on this host)")
+	flag.StringVar(&f.ate.API, "ate-api", "api.ate-system.svc:443", "substrate: ate-api-server's gRPC address")
+	flag.StringVar(&f.ate.APIServerName, "ate-api-server-name", "api.ate-system.svc", "substrate: the name ate-api's certificate is for")
+	flag.StringVar(&f.ate.CAFile, "ate-ca", "", "substrate: CA file for ate-api's certificate (the service-DNS signer's ClusterTrustBundle)")
+	flag.StringVar(&f.ate.TokenFile, "ate-token", "", "substrate: file holding a token ate-api accepts (a projected service account token with its audience), re-read on every call")
+	flag.StringVar(&f.ate.Router, "ate-router", "atenet-router.ate-system.svc:8081", "substrate: atenet-router's CONNECT listener")
+	flag.StringVar(&f.ate.Atespace, "atespace", "sandpit", "substrate: the atespace sandboxes are made in")
+	flag.StringVar(&f.ate.Template, "template", "e2b", "substrate: the ActorTemplate sandboxes are made from; with --template-file, the base of its name")
+	flag.StringVar(&f.ate.TemplateFile, "template-file", "", "substrate: an ActorTemplate (YAML) to make at startup, with the atespace, as <template>-<hash of the file>")
+	flag.DurationVar(&f.ate.IdleSuspend, "ate-idle-suspend", 0, "substrate: suspend a sandbox idle this long, warm; the next request resumes it (0: never)")
 	flag.StringVar(&f.listen, "listen", "127.0.0.1:7900", "the Sprites API and the dashboard (sandpit's block is 7900-7904: 7901 E2B, 7902 Vercel, 7903 Daytona, 7904 Modal, each off until its flag is given)")
 	flag.StringVar(&f.apiListen, "api-listen", "", "a second listen address serving the bearer API alone, whatever the Host: no dashboard and no sprite URLs. Point a reverse proxy that publishes the API here rather than at --listen")
 	flag.DurationVar(&o.IdleTimeout, "idle-timeout", 30*time.Second, "suspend a sprite after this long with no activity")
@@ -121,6 +137,10 @@ func Bind(fs *flag.FlagSet) (finish func() (server.Options, *Flags)) {
 		o.Backup = backupOpts()
 		o.DiskReserve = *diskReserve << 20
 		o.Listen, o.APIHosts = f.listen, parseHosts(*apiHosts)
+		if f.backend != "firecracker" && f.backend != "substrate" {
+			fmt.Fprintf(os.Stderr, "--backend: want firecracker or substrate, got %q\n", f.backend)
+			os.Exit(2)
+		}
 		return o, f
 	}
 }
