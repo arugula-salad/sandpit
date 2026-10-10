@@ -244,9 +244,6 @@ func extOf(rec store.Record) ext {
 // starts suspended, at the template's golden snapshot.
 func (e *Engine) Create(ctx context.Context, spec engine.CreateSpec) (store.Sprite, error) {
 	sp := spec.Sprite
-	if spec.Checkpoint != nil {
-		return sp, errors.New("substrate: creating from a checkpoint is not supported yet")
-	}
 	api := apiOf(sp.API)
 	e.mu.Lock()
 	tmpl, ok := e.templates[api]
@@ -260,24 +257,27 @@ func (e *Engine) Create(ctx context.Context, spec engine.CreateSpec) (store.Spri
 	if sp.Ext == nil {
 		sp.Ext = map[string]json.RawMessage{}
 	}
-	x := ext{}
-	if api != "e2b" {
-		b := make([]byte, 24)
-		rand.Read(b)
-		x.AgentToken = hex.EncodeToString(b)
+	var tag *ateapipb.ObjectRef
+	if cp := spec.Checkpoint; cp != nil {
+		// From another sandbox's checkpoint (the caller holds it, HoldCheckpoint).
+		tag = e.tagRef(cp.Sprite.ID, cp.ID)
+		sp.Ext[extKey] = fromCheckpoint(cp.Sprite)
+	} else {
+		x := ext{}
+		if api != "e2b" {
+			b := make([]byte, 24)
+			rand.Read(b)
+			x.AgentToken = hex.EncodeToString(b)
+		}
+		raw, _ := json.Marshal(x)
+		sp.Ext[extKey] = raw
 	}
-	raw, _ := json.Marshal(x)
-	sp.Ext[extKey] = raw
 	if err := e.store.Create(&sp); err != nil {
 		return sp, err
 	}
-	_, err := e.api.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
-		Metadata:      &ateapipb.ResourceMetadata{Atespace: e.opts.Atespace, Name: sp.ID},
-		ActorTemplate: &ateapipb.ObjectRef{Atespace: e.opts.Atespace, Name: tmpl},
-	}})
-	if err != nil {
+	if err := e.createActor(ctx, sp.ID, tmpl, tag); err != nil {
 		e.store.Delete(sp.ID)
-		return sp, fmt.Errorf("substrate: CreateActor: %w", err)
+		return sp, err
 	}
 	e.log.Info("sandbox created", "id", sp.ID, "api", sp.API)
 	return sp, nil
@@ -294,6 +294,12 @@ func (e *Engine) Delete(rec store.Record) error {
 	defer cancel()
 	if _, err := e.api.DeleteActor(ctx, &ateapipb.DeleteActorRequest{Actor: e.ref(rec.ID), AnyState: true}); err != nil && status.Code(err) != codes.NotFound {
 		return fmt.Errorf("substrate: DeleteActor: %w", err)
+	}
+	// Its checkpoints go with it, as on Firecracker.
+	for _, cp := range sp.Checkpoints {
+		if _, err := e.api.DeleteTag(ctx, &ateapipb.DeleteTagRequest{Tag: e.tagRef(rec.ID, cp.ID)}); err != nil && status.Code(err) != codes.NotFound {
+			e.log.Warn("deleting a checkpoint's tag", "id", rec.ID, "checkpoint", cp.ID, "err", err)
+		}
 	}
 	e.mu.Lock()
 	delete(e.running, rec.ID)

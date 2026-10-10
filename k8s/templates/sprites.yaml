@@ -7,7 +7,7 @@ workerSelector:
     workload: sandpit-e2b
 containers:
 - name: agent
-  image: ghcr.io/arugula-salad/sandpit-guest@sha256:deab18dc8cb00b7019e5694bdf105319486b75fdf5ce9ac8c5e01c213dc87bce
+  image: ghcr.io/arugula-salad/sandpit-guest@sha256:0fc7add47b29bb7e37fc09c81b021d7c67609d52919260404c06086ebf51a0a2
   securityContext:
     capabilities:
       add: [CHOWN, DAC_OVERRIDE, FOWNER, FSETID, KILL, NET_BIND_SERVICE, SETUID, SETGID, SETPCAP, SETFCAP, SYS_CHROOT, MKNOD]
