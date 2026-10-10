@@ -41,6 +41,9 @@ spec:
       automountServiceAccountToken: false
       securityContext:
         runAsNonRoot: true
+        # distroless's nonroot, by number: Kubernetes can't check a named user is non-root.
+        runAsUser: 65532
+        runAsGroup: 65532
         fsGroup: 65532
         seccompProfile:
           type: RuntimeDefault
