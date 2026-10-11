@@ -88,6 +88,10 @@ type Options struct {
 	// LeaseWarning is how long before a deleting deadline sprite.expiring is
 	// published (sandpitd's --lease-warning); 0 is 5 minutes.
 	LeaseWarning time.Duration
+	// AutoCheckpointKeep is how many automatic checkpoints (the state a restore
+	// replaced) are kept per sandbox (sandpitd's --auto-checkpoint-keep); 0
+	// takes none.
+	AutoCheckpointKeep int
 }
 
 // Engine runs sandboxes as Substrate actors. It satisfies e2b.Engine.
@@ -333,6 +337,8 @@ func (e *Engine) Delete(rec store.Record) error {
 // returns it, counting the use until release for the idle rule. A running
 // actor costs no API call: the router resumes one Substrate itself suspended.
 func (e *Engine) Acquire(ctx context.Context, rec store.Record) (engine.Guest, func(), error) {
+	// A checkpoint the guest asked for is taken before anything else reaches it.
+	e.waitAllPending(rec.ID)
 	if g := e.use(rec.ID); g != nil {
 		return g, g.release, nil
 	}

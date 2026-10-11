@@ -38,8 +38,10 @@ func (e *Engine) tagRef(sandboxID, checkpoint string) *ateapipb.ObjectRef {
 
 // inGuestCheckpointDelay is how long a checkpoint asked for from inside the
 // sandbox waits before it is taken, for the answer to reach the guest first:
-// taking it suspends the sandbox, which would cut the request off.
-const inGuestCheckpointDelay = time.Second
+// taking it suspends the sandbox, which would cut the request off. Requests
+// from outside wait for it (Acquire), so only the guest's own background
+// work in this window lands in the checkpoint.
+const inGuestCheckpointDelay = 200 * time.Millisecond
 
 // CreateCheckpoint suspends the sandbox and tags its snapshot. Asked from
 // inside (from is set), it answers at once with the checkpoint it is about to
@@ -109,7 +111,6 @@ func (e *Engine) checkpointFromInside(rec store.Record, comment string, info eng
 	unlock()
 	info("Checkpoint taken in a moment: the sprite pauses for it")
 	go func() {
-		defer done()
 		time.Sleep(inGuestCheckpointDelay)
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer cancel()
@@ -129,6 +130,7 @@ func (e *Engine) checkpointFromInside(rec store.Record, comment string, info eng
 			e.log.Info("checkpoint created", "id", rec.ID, "checkpoint", cp.ID, "from", "inside")
 			e.Emit(cur, "checkpoint.created", map[string]any{"checkpoint": cp.ID, "auto": false})
 		}
+		done() // before resuming it: Acquire waits for pending checkpoints
 		// It was running when it asked: carry on.
 		if r, gerr := e.store.GetRecord(rec.ID); gerr == nil {
 			if _, release, aerr := e.Acquire(ctx, r); aerr == nil {
@@ -241,6 +243,18 @@ func (e *Engine) RestoreCheckpoint(rec store.Record, from *engine.GuestChan, id 
 	if _, err := e.api.GetTag(ctx, &ateapipb.GetTagRequest{Tag: e.tagRef(rec.ID, id)}); err != nil {
 		return fmt.Errorf("substrate: checkpoint %s: %w", id, err)
 	}
+	// Asked from inside, the guest is told first: saving the current state
+	// below suspends the sandbox, which ends the request that asked.
+	if from != nil && beforeStop != nil {
+		beforeStop()
+		beforeStop = nil
+		time.Sleep(200 * time.Millisecond)
+	}
+	// What the restore throws away is kept as an automatic checkpoint, so a
+	// restore can be undone, as on Firecracker.
+	if err := e.autoCheckpointLocked(ctx, rec.ID, "before restore to "+id, id); err != nil {
+		return fmt.Errorf("save current state first: %w", err)
+	}
 	if beforeStop != nil {
 		beforeStop()
 	}
@@ -262,6 +276,52 @@ func (e *Engine) RestoreCheckpoint(rec store.Record, from *engine.GuestChan, id 
 	cur, _ = e.store.UpdateRecord(rec.ID, func(r *store.Record) { r.Lineage = lineage })
 	e.log.Info("checkpoint restored", "id", rec.ID, "checkpoint", id)
 	e.Emit(cur, "checkpoint.restored", map[string]any{"checkpoint": id})
+	return nil
+}
+
+// autoCheckpointLocked suspends the sandbox and tags its state as auto-N,
+// keeping the newest AutoCheckpointKeep autos (and spare, a restore's target).
+// The caller holds the sandbox's lock.
+func (e *Engine) autoCheckpointLocked(ctx context.Context, id, comment, spare string) error {
+	keep := e.opts.AutoCheckpointKeep
+	if keep < 1 {
+		return nil
+	}
+	cur, err := e.store.GetRecord(id)
+	if err != nil {
+		return err
+	}
+	if err := e.suspendLocked(id, "checkpoint"); err != nil {
+		return err
+	}
+	cp := store.Checkpoint{ID: fmt.Sprintf("auto-%d", cur.NextAuto+1), Comment: comment, History: cur.Lineage,
+		CreateTime: time.Now().UTC(), IsAuto: true}
+	if err := e.tag(ctx, id, cp.ID); err != nil {
+		return err
+	}
+	cur, _ = e.store.UpdateRecord(id, func(r *store.Record) {
+		r.NextAuto++
+		r.Checkpoints = append(r.Checkpoints, cp)
+	})
+	e.Emit(cur, "checkpoint.created", map[string]any{"checkpoint": cp.ID, "auto": true})
+	// Prune: the oldest autos beyond keep, never spare.
+	var autos []string
+	for _, c := range cur.Checkpoints {
+		if c.IsAuto && c.ID != spare {
+			autos = append(autos, c.ID)
+		}
+	}
+	for len(autos) > keep {
+		old := autos[0]
+		autos = autos[1:]
+		if _, err := e.api.DeleteTag(ctx, &ateapipb.DeleteTagRequest{Tag: e.tagRef(id, old)}); err != nil && status.Code(err) != codes.NotFound {
+			e.log.Warn("pruning an automatic checkpoint", "id", id, "checkpoint", old, "err", err)
+			continue
+		}
+		e.store.UpdateRecord(id, func(r *store.Record) {
+			r.Checkpoints = slices.DeleteFunc(r.Checkpoints, func(c store.Checkpoint) bool { return c.ID == old })
+		})
+	}
 	return nil
 }
 
