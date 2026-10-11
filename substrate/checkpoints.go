@@ -74,6 +74,7 @@ func (e *Engine) CreateCheckpoint(rec store.Record, from *engine.GuestChan, comm
 		r.NextCheckpoint++
 		r.Lineage = append([]string{cp.ID}, r.Lineage...)
 		r.Checkpoints = append(r.Checkpoints, cp)
+		setExt(r, extOf(*r).tagged(cp.ID))
 	})
 	e.log.Info("checkpoint created", "id", rec.ID, "checkpoint", cp.ID)
 	e.Emit(cur, "checkpoint.created", map[string]any{"checkpoint": cp.ID, "auto": false})
@@ -273,7 +274,10 @@ func (e *Engine) RestoreCheckpoint(rec store.Record, from *engine.GuestChan, id 
 	}
 	info("Restored from %s in %s", id, time.Since(start).Round(time.Millisecond))
 	lineage := append([]string{id}, target.History...)
-	cur, _ = e.store.UpdateRecord(rec.ID, func(r *store.Record) { r.Lineage = lineage })
+	cur, _ = e.store.UpdateRecord(rec.ID, func(r *store.Record) {
+		r.Lineage = lineage
+		setExt(r, extOf(*r).atCheckpoint(id))
+	})
 	e.log.Info("checkpoint restored", "id", rec.ID, "checkpoint", id)
 	e.Emit(cur, "checkpoint.restored", map[string]any{"checkpoint": id})
 	return nil
@@ -302,6 +306,7 @@ func (e *Engine) autoCheckpointLocked(ctx context.Context, id, comment, spare st
 	cur, _ = e.store.UpdateRecord(id, func(r *store.Record) {
 		r.NextAuto++
 		r.Checkpoints = append(r.Checkpoints, cp)
+		setExt(r, extOf(*r).tagged(cp.ID))
 	})
 	e.Emit(cur, "checkpoint.created", map[string]any{"checkpoint": cp.ID, "auto": true})
 	// Prune: the oldest autos beyond keep, never spare.
@@ -356,10 +361,11 @@ func (e *Engine) createActor(ctx context.Context, id, template string, tag *atea
 }
 
 // fromCheckpoint is the ext a sandbox created from src's checkpoint starts
-// with: src's agent token, since the snapshot's agent was claimed with it,
-// and started, since the snapshot is not a template's golden one.
-func fromCheckpoint(src store.Record) json.RawMessage {
+// with: src's agent token, since the snapshot's agent was claimed with it (or
+// is claimed with it on the first resume, from a cold checkpoint), and
+// started unless the checkpoint is cold.
+func fromCheckpoint(src store.Record, checkpoint string) json.RawMessage {
 	x := extOf(src)
-	raw, _ := json.Marshal(ext{Started: true, AgentToken: x.AgentToken})
+	raw, _ := json.Marshal(ext{AgentToken: x.AgentToken, Started: !slices.Contains(x.Cold, checkpoint)})
 	return raw
 }
