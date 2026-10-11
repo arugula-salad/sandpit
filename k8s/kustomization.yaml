@@ -11,6 +11,7 @@ namespace: sandpit
 resources:
   - namespace.yaml
   - workerpool.yaml
+  - networkpolicy.yaml
   - infisical.yaml
   - sandpitd.yaml
   - ingress.yaml

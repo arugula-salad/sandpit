@@ -293,11 +293,6 @@ func (e *Engine) Create(ctx context.Context, spec engine.CreateSpec) (store.Spri
 		e.store.Delete(sp.ID)
 		return sp, err
 	}
-	if len(sp.NetworkRules) > 0 { // a clone's, copied from its source
-		if err := e.reapplyEgress(sp.ID); err != nil {
-			e.log.Error("network policy on the new actor", "id", sp.ID, "err", err)
-		}
-	}
 	e.Emit(sp.Record, "sprite.created", map[string]any{"cloned": spec.Checkpoint != nil})
 	e.log.Info("sandbox created", "id", sp.ID, "api", sp.API)
 	return sp, nil

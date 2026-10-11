@@ -6,7 +6,6 @@ package netpolicy
 
 import (
 	"fmt"
-	"slices"
 	"strings"
 
 	"github.com/arugula-salad/sandpit/internal/store"
@@ -152,48 +151,4 @@ var defaultDomains = []string{
 	"api.anthropic.com", "api.openai.com", "generativelanguage.googleapis.com",
 	"api.mistral.ai", "api.cohere.com", "api.groq.com", "openrouter.ai",
 	"huggingface.co", "*.huggingface.co",
-}
-
-// Allowlist is the policy as a list of the patterns it allows ("example.com",
-// "*.example.com"), for an enforcer that has allows only and refuses
-// everything else (Agent Substrate's egress policies). unrestricted is a
-// policy that refuses nothing; ok is false when a deny falls inside something
-// allowed ("*" and then a deny, say), which an allow-only list can't express.
-func (p *Policy) Allowlist() (patterns []string, unrestricted, ok bool) {
-	if !p.Restrictive() {
-		return nil, true, true
-	}
-	allowedWild := func(host string) bool { // a wildcard (or "*") above host allows it
-		for rest := host; ; {
-			i := strings.IndexByte(rest, '.')
-			if i < 0 {
-				return p.all != nil && *p.all
-			}
-			rest = rest[i+1:]
-			if allow, set := p.wild[rest]; set {
-				return allow
-			}
-		}
-	}
-	for host, allow := range p.exact {
-		switch {
-		case allow:
-			patterns = append(patterns, host)
-		case allowedWild(host):
-			return nil, false, false
-		}
-	}
-	for base, allow := range p.wild {
-		switch {
-		case allow:
-			patterns = append(patterns, "*."+base)
-		case allowedWild(base):
-			return nil, false, false
-		}
-	}
-	if p.all != nil && *p.all {
-		return nil, false, false // "*" allowed, and something denied (else not restrictive)
-	}
-	slices.Sort(patterns)
-	return patterns, false, true
 }
