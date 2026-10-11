@@ -12,6 +12,9 @@ chmod 755 /
 # resolve (glibc's getaddrinfo, Go): put back what every Linux has.
 grep -qE '^[^#]*[[:space:]]localhost([[:space:]]|$)' /etc/hosts 2>/dev/null ||
   printf '127.0.0.1\tlocalhost\n::1\tlocalhost ip6-localhost ip6-loopback\n' >> /etc/hosts
+# ...and the actor's hostname (sudo looks it up).
+h=$(hostname 2>/dev/null)
+[ -n "$h" ] && ! grep -qE "[[:space:]]$h([[:space:]]|\$)" /etc/hosts && printf '127.0.1.1\t%s\n' "$h" >> /etc/hosts
 while read -r uid gid mode path; do
   chown -h "$uid:$gid" "$path" 2>/dev/null
   [ -L "$path" ] || chmod "$mode" "$path" 2>/dev/null

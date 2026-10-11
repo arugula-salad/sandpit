@@ -159,6 +159,11 @@ func Run(name string, opts server.Options, f *Flags, extra ...Frontend) {
 	var life engine.Backend
 	switch f.backend {
 	case "substrate":
+		// Sprites sleep when idle, as on Firecracker (--idle-timeout); the other
+		// APIs follow their own timeouts unless --ate-idle-suspend says otherwise.
+		if f.ate.IdleByAPI == nil {
+			f.ate.IdleByAPI = map[string]time.Duration{"sprites": opts.IdleTimeout}
+		}
 		eng, err := substrate.New(f.ate, st, log)
 		if err != nil {
 			fatal(log, err)

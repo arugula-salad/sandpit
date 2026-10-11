@@ -81,6 +81,10 @@ type Options struct {
 	// processes stop with it, which is why E2B's sandboxes are never idled
 	// on the Firecracker engine; here it is the operator's choice.
 	IdleSuspend time.Duration
+	// IdleByAPI overrides IdleSuspend for one API's sandboxes ("sprites",
+	// "e2b", ...): the Sprites API's are suspended after sandpitd's
+	// --idle-timeout, as Firecracker's are. 0 never does.
+	IdleByAPI map[string]time.Duration
 }
 
 // Engine runs sandboxes as Substrate actors. It satisfies e2b.Engine.
@@ -339,7 +343,7 @@ func (e *Engine) Acquire(ctx context.Context, rec store.Record) (engine.Guest, f
 		return nil, nil, fmt.Errorf("substrate: ResumeActor: %w", err)
 	}
 	x := extOf(cur)
-	g := &guest{e: e, id: rec.ID, lastUse: time.Now(), agentToken: x.AgentToken}
+	g := &guest{e: e, id: rec.ID, api: apiOf(cur.API), lastUse: time.Now(), agentToken: x.AgentToken}
 	warm := x.Started
 	if !warm && x.AgentToken != "" {
 		if err := g.claim(ctx); err != nil {
@@ -463,18 +467,16 @@ func (e *Engine) janitor() {
 			}
 			e.store.UpdateRecord(rec.ID, func(r *store.Record) { r.ExpiresAt = nil })
 		}
-		if e.opts.IdleSuspend > 0 {
-			e.mu.Lock()
-			var idle []string
-			for id, g := range e.running {
-				if g.inflight == 0 && now.Sub(g.lastUse) >= e.opts.IdleSuspend {
-					idle = append(idle, id)
-				}
+		e.mu.Lock()
+		var idle []string
+		for id, g := range e.running {
+			if d := e.idleFor(g.api); d > 0 && g.inflight == 0 && now.Sub(g.lastUse) >= d {
+				idle = append(idle, id)
 			}
-			e.mu.Unlock()
-			for _, id := range idle {
-				go e.idleSuspend(id)
-			}
+		}
+		e.mu.Unlock()
+		for _, id := range idle {
+			go e.idleSuspend(id)
 		}
 	}
 }
@@ -483,7 +485,7 @@ func (e *Engine) idleSuspend(id string) {
 	defer e.lock(id)()
 	e.mu.Lock()
 	g := e.running[id]
-	busy := g == nil || g.inflight > 0 || time.Since(g.lastUse) < e.opts.IdleSuspend
+	busy := g == nil || g.inflight > 0 || e.idleFor(g.api) <= 0 || time.Since(g.lastUse) < e.idleFor(g.api)
 	e.mu.Unlock()
 	if busy {
 		return
@@ -493,10 +495,19 @@ func (e *Engine) idleSuspend(id string) {
 	}
 }
 
+// idleFor is how long a sandbox of api may sit idle before it is suspended.
+func (e *Engine) idleFor(api string) time.Duration {
+	if d, ok := e.opts.IdleByAPI[api]; ok {
+		return d
+	}
+	return e.opts.IdleSuspend
+}
+
 // guest is an actor as the front end reaches it: its ports, through the router.
 type guest struct {
 	e          *Engine
 	id         string
+	api        string    // apiOf the record's API, for the idle rule
 	agentToken string    // empty: no agent in this guest
 	inflight   int       // guarded by e.mu
 	lastUse    time.Time // guarded by e.mu
