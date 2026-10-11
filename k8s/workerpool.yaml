@@ -10,12 +10,15 @@ metadata:
   labels:
     workload: sandpit-e2b
 spec:
-  replicas: 2
+  replicas: 4
   sandboxClass: gvisor
   workerImage: git.inevitable.fyi/jhgaylor/substrate/ateom-gvisor:v0.4.0-hc1@sha256:6322d82a94410f92f56aa39d8948a5213a321ba44730deecd7c2a7141fc81caf
   template:
     nodeSelector:
       home-cloud/agent-substrate: "true"
     resources:
-      limits: {cpu: "2", memory: 2Gi}
-      requests: {cpu: 500m, memory: 2Gi}
+      # Each worker holds this whether busy or not: ~7 one-GiB sandboxes apiece, 4 x 8 GiB across
+      # geek and basil. The CPU request is small because geek's are mostly spoken for; actors
+      # use up to the limit.
+      limits: {cpu: "4", memory: 8Gi}
+      requests: {cpu: 250m, memory: 8Gi}
