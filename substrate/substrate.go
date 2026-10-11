@@ -33,6 +33,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -232,6 +233,33 @@ type ext struct {
 	// first resume and asked for on every stream after; empty for a guest
 	// with no agent (E2B's).
 	AgentToken string `json:"agent_token,omitempty"`
+	// Cold are the checkpoints tagged before the actor first started: they
+	// hold the template's snapshot, whose agent is unclaimed and whose boot
+	// hooks have not run, so a sandbox put back on one starts again.
+	Cold []string `json:"cold,omitempty"`
+}
+
+// atCheckpoint is x as it is once the sandbox is put back on checkpoint.
+func (x ext) atCheckpoint(checkpoint string) ext {
+	x.Started = !slices.Contains(x.Cold, checkpoint)
+	return x
+}
+
+// tagged is x with checkpoint recorded, cold if the actor has not started.
+func (x ext) tagged(checkpoint string) ext {
+	if !x.Started {
+		x.Cold = append(slices.DeleteFunc(slices.Clone(x.Cold), func(c string) bool { return c == checkpoint }), checkpoint)
+	}
+	return x
+}
+
+// setExt stores x in r.
+func setExt(r *store.Record, x ext) {
+	raw, _ := json.Marshal(x)
+	if r.Ext == nil {
+		r.Ext = map[string]json.RawMessage{}
+	}
+	r.Ext[extKey] = raw
 }
 
 // AgentPort is where sandpit-agent listens in an agent guest
@@ -275,7 +303,7 @@ func (e *Engine) Create(ctx context.Context, spec engine.CreateSpec) (store.Spri
 	if cp := spec.Checkpoint; cp != nil {
 		// From another sandbox's checkpoint (the caller holds it, HoldCheckpoint).
 		tag = e.tagRef(cp.Sprite.ID, cp.ID)
-		sp.Ext[extKey] = fromCheckpoint(cp.Sprite)
+		sp.Ext[extKey] = fromCheckpoint(cp.Sprite, cp.ID)
 	} else {
 		x := ext{}
 		if api != "e2b" {
