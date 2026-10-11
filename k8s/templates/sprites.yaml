@@ -1,7 +1,9 @@
 # The sprites API's guest (images/substrate-agent on its userland) as an ActorTemplate for
 # Substrate v0.4.0. sandpitd makes it (--api-template sprites=...) as sprites-<hash of this file>.
 # Its sandpit-agent listens on 2024 behind an upgrade, claimed on each sandbox's first
-# resume. Snapshots go to home-cloud's Garage bucket agent-substrate.
+# resume. Snapshots go to home-cloud's Garage bucket agent-substrate. SYS_PTRACE is the agent's,
+# to read other users' /proc/<pid>/fd and tell which session opened a port; sessions get the
+# capabilities their privileges profile allows.
 workerSelector:
   matchLabels:
     workload: sandpit-e2b
@@ -10,7 +12,7 @@ containers:
   image: ghcr.io/arugula-salad/sandpit-guest@sha256:8b3853b3f09ce5bbaaa8740a560655bb3edca048b8cc22ebdd8bbe09c37761ad
   securityContext:
     capabilities:
-      add: [CHOWN, DAC_OVERRIDE, FOWNER, FSETID, KILL, NET_BIND_SERVICE, NET_RAW, SETUID, SETGID, SETPCAP, SETFCAP, SYS_CHROOT, MKNOD]
+      add: [CHOWN, DAC_OVERRIDE, FOWNER, FSETID, KILL, NET_BIND_SERVICE, NET_RAW, SETUID, SETGID, SETPCAP, SETFCAP, SYS_CHROOT, SYS_PTRACE, MKNOD]
 resources:
   limits:
   - {name: cpu, quantity: "2"}
