@@ -1,0 +1,103 @@
+# substrate.inevitable.fyi
+
+> Isolated Linux sandboxes (gVisor, on Agent Substrate: https://github.com/agent-substrate/substrate)
+> for Jake's friends and their agents, served from the Kubernetes cluster in Jake's house by sandpit
+> (https://github.com/arugula-salad/sandpit). The Firecracker twin is https://sandbox.inevitable.fyi. It speaks
+> four providers' APIs, so their official SDKs work unmodified: Sprites, E2B, Vercel Sandbox and
+> Daytona. Point the SDK at the URL below and use a sandpit API key instead of the provider's.
+> Unofficial; not affiliated with Fly.io, E2B, Vercel or Daytona.
+
+## Access
+
+- Every request needs an API key from Jake. One key works for all four APIs. Put it where each SDK
+  expects its own key (table below). Without a key, every API answers 401.
+- Sandbox URLs (ports, routes, previews) are public, as upstream. The sandbox ID in the URL is the
+  only secret. Exceptions: a sprite's URL asks for the key until its `url_settings.auth` is
+  `"public"`; a private Daytona sandbox's preview wants its `x-daytona-preview-token`.
+- An admin key can do anything on this host, including to sandboxes other people made. Be careful.
+
+## The four APIs
+
+| API | Set this | Sandbox URLs |
+| --- | --- | --- |
+| Sprites | base URL `https://sprites.substrate.inevitable.fyi`, token = your key | `https://<name>.sprites.substrate.inevitable.fyi` |
+| E2B | `E2B_API_URL=https://e2b.substrate.inevitable.fyi`, `E2B_DOMAIN=e2b.substrate.inevitable.fyi`, `E2B_API_KEY=<key>` | `https://<port>-<id>.e2b.substrate.inevitable.fyi` (`get_host(port)`) |
+| Vercel Sandbox | base URL `https://vercel.substrate.inevitable.fyi/api`, `VERCEL_TOKEN=<key>`, any `VERCEL_TEAM_ID` and `VERCEL_PROJECT_ID` | `https://<subdomain>.vercel.substrate.inevitable.fyi` (a route's `url`) |
+| Daytona | `DAYTONA_API_URL=https://daytona.substrate.inevitable.fyi/api`, `DAYTONA_API_KEY=<key>` | `https://<port>-<id>.daytona.substrate.inevitable.fyi` (preview links) |
+
+Modal is not available here (a partial implementation exists; see sandpit's docs/plans/modal-parity.md).
+
+## Minimal examples (Python)
+
+Sprites (`pip install sprites-py`):
+
+```python
+from sprites import SpritesClient
+client = SpritesClient("<key>", base_url="https://sprites.substrate.inevitable.fyi")
+sprite = client.create_sprite("pick-a-unique-name")   # names are global on this host
+print(sprite.command("uname", "-a").output().decode())
+client.delete_sprite("pick-a-unique-name")
+```
+
+E2B (`pip install e2b`):
+
+```python
+import os
+os.environ |= {"E2B_API_URL": "https://e2b.substrate.inevitable.fyi",
+               "E2B_DOMAIN": "e2b.substrate.inevitable.fyi", "E2B_API_KEY": "<key>"}
+from e2b import Sandbox
+with Sandbox.create() as sbx:
+    print(sbx.commands.run("echo hi").stdout)
+```
+
+Daytona (`pip install daytona`):
+
+```python
+import os
+os.environ |= {"DAYTONA_API_URL": "https://daytona.substrate.inevitable.fyi/api", "DAYTONA_API_KEY": "<key>"}
+from daytona import Daytona
+sbx = Daytona().create()
+print(sbx.process.exec("echo hi").result)
+sbx.delete()
+```
+
+Vercel Sandbox (`pip install vercel-sandbox`): pass
+`SandboxServiceOptions(base_url="https://vercel.substrate.inevitable.fyi/api")` to `vercel.api.session(...)`,
+with `VERCEL_TOKEN`, `VERCEL_TEAM_ID` and `VERCEL_PROJECT_ID` set (the last two may be anything). The
+JS SDK (`@vercel/sandbox`) has vercel.com hardcoded and needs the preload
+https://substrate.inevitable.fyi/vercel-target.mjs (`node --import ./vercel-target.mjs app.mjs`, with
+`VERCEL_SANDBOX_URL=https://vercel.substrate.inevitable.fyi/api`).
+
+## Check it works
+
+`curl -O https://substrate.inevitable.fyi/try.py && SANDBOXD_API_KEY=<key> uv run try.py` creates a
+sandbox on each API, runs a command, serves a page on a port and fetches it through the public URL,
+then deletes it. `uv run try.py e2b` (or `sprites`, `vercel`, `daytona`) tries one. Each API also
+answers `GET /healthz` without a key.
+
+## Behaviour worth knowing
+
+- Sandboxes run under gVisor, a user-space kernel, not in a VM: full Linux userland, root via sudo,
+  but a few kernel features behave differently (cgroup memory limits inside the sandbox, inotify).
+- Sprites sandboxes suspend after about 30 s idle and wake on the next request with their memory:
+  running processes carry on, in under a second. E2B, Vercel and Daytona sandboxes follow their own
+  APIs' timeouts. A suspended sandbox always keeps its memory; there are no cold boots.
+- Network: the internet, any TCP port. No UDP but DNS, no ICMP, nothing inside Jake's network.
+  Per-sandbox network allowlists aren't supported here (the policy endpoints answer 503).
+- Checkpoints are snapshots of memory and disk; taking one pauses the sandbox for a moment.
+  Not supported here: mounting a checkpoint inside a sandbox, memory autoscale, sending a sprite cold.
+- A sandbox belongs to the API that created it: E2B sandboxes are not listed by the Daytona API, etc.
+- Differences from each hosted provider are listed in sandpit's docs/providers/*-differences.md.
+
+## Limits
+
+- About 28 one-GiB sandboxes can run at once, across two machines; idle ones suspend to make room.
+- No SLA: if the house loses power, so do the sandboxes.
+
+## Docs
+
+- E2B SDK against sandpit: https://github.com/arugula-salad/sandpit/blob/main/docs/e2b-sdk.md
+- Vercel SDK against sandpit: https://github.com/arugula-salad/sandpit/blob/main/docs/vercel-sdk.md
+- Daytona SDK against sandpit: https://github.com/arugula-salad/sandpit/blob/main/docs/daytona-sdk.md
+- Sprites API: https://github.com/arugula-salad/sandpit/blob/main/docs/api.md
+- Human-friendly page: https://substrate.inevitable.fyi/

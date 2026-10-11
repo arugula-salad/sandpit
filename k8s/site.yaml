@@ -1,0 +1,89 @@
+# https://substrate.inevitable.fyi: the page about the four APIs on Agent Substrate, for Jake's
+# friends and their agents (llms.txt), the twin of geek's sandbox.inevitable.fyi. Static files
+# from site/, generated into a ConfigMap (kustomization.yaml), so an edit rolls the pod. Its
+# nginx also proxies /status/<api> to sandpitd's /healthz for the page's status lights. Holds no
+# secrets.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: site
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: site
+  template:
+    metadata:
+      labels:
+        app: site
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: nginx
+          image: docker.io/nginxinc/nginx-unprivileged:1.29-alpine
+          ports:
+            - name: http
+              containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+          resources:
+            requests: {cpu: 10m, memory: 16Mi}
+            limits: {memory: 64Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - {name: site, mountPath: /srv/site}
+            - {name: conf, mountPath: /etc/nginx/conf.d}
+      volumes:
+        - name: site
+          configMap:
+            name: site
+        - name: conf
+          configMap:
+            name: site-nginx
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: site
+spec:
+  selector:
+    app: site
+  ports:
+    - {name: http, port: 80, targetPort: http}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: site-tls
+spec:
+  secretName: site-tls
+  issuerRef:
+    name: letsencrypt-production
+    kind: ClusterIssuer
+  dnsNames:
+    - substrate.inevitable.fyi
+---
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: site
+spec:
+  entryPoints:
+    - websecure
+  routes:
+    - match: Host(`substrate.inevitable.fyi`)
+      kind: Rule
+      services:
+        - name: site
+          port: 80
+  tls:
+    secretName: site-tls
