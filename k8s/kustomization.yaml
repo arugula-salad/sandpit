@@ -15,7 +15,18 @@ resources:
   - infisical.yaml
   - sandpitd.yaml
   - ingress.yaml
+  - site.yaml
 configMapGenerator:
+  # substrate.inevitable.fyi's files (site.yaml).
+  - name: site
+    files:
+      - site/index.html
+      - site/llms.txt
+      - site/try.py
+      - site/vercel-target.mjs
+  - name: site-nginx
+    files:
+      - default.conf=site/nginx.conf
   # A new guest image is a new file, so a new ConfigMap, a rolled Deployment, and a new
   # ActorTemplate (sandpitd names it after the file's hash).
   - name: sandpit-actortemplate
