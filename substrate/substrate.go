@@ -105,6 +105,7 @@ type Engine struct {
 	events    *engine.Bus
 	onDelete  []func(store.Sprite)
 	describer engine.Describer
+	guestAPI  func(store.Record, *engine.GuestChan) http.Handler
 	quitting  bool
 }
 
@@ -306,7 +307,7 @@ func (e *Engine) Delete(rec store.Record) error {
 		}
 	}
 	e.mu.Lock()
-	delete(e.running, rec.ID)
+	e.dropRunningLocked(rec.ID)
 	e.mu.Unlock()
 	if err := e.store.Delete(rec.ID); err != nil {
 		return err
@@ -343,7 +344,7 @@ func (e *Engine) Acquire(ctx context.Context, rec store.Record) (engine.Guest, f
 		return nil, nil, fmt.Errorf("substrate: ResumeActor: %w", err)
 	}
 	x := extOf(cur)
-	g := &guest{e: e, id: rec.ID, api: apiOf(cur.API), lastUse: time.Now(), agentToken: x.AgentToken}
+	g := &guest{e: e, id: rec.ID, api: apiOf(cur.API), lastUse: time.Now(), agentToken: x.AgentToken, quit: make(chan struct{})}
 	warm := x.Started
 	if !warm && x.AgentToken != "" {
 		if err := g.claim(ctx); err != nil {
@@ -366,6 +367,7 @@ func (e *Engine) Acquire(ctx context.Context, rec store.Record) (engine.Guest, f
 	e.mu.Lock()
 	e.running[rec.ID] = g
 	e.mu.Unlock()
+	go e.keepHostChannel(g, cur)
 	e.log.Info("sandbox resumed", "id", rec.ID, "warm", warm, "resumed", resp.GetResumed(),
 		"worker", resp.GetActor().GetStatus().GetWorkerAssignment().String(), "took", time.Since(start).Round(time.Millisecond))
 	g.inflight++
@@ -399,7 +401,7 @@ func (e *Engine) suspendLocked(id, why string) error {
 		return fmt.Errorf("substrate: SuspendActor: %w", err)
 	}
 	e.mu.Lock()
-	delete(e.running, id)
+	e.dropRunningLocked(id)
 	e.mu.Unlock()
 	e.log.Info("sandbox suspended", "id", id, "why", why, "took", time.Since(start).Round(time.Millisecond))
 	return nil
@@ -511,6 +513,21 @@ type guest struct {
 	agentToken string    // empty: no agent in this guest
 	inflight   int       // guarded by e.mu
 	lastUse    time.Time // guarded by e.mu
+	// quit closes when this is no longer the running guest (suspended,
+	// deleted or replaced), ending what runs on its behalf.
+	quit     chan struct{}
+	quitOnce sync.Once
+}
+
+func (g *guest) stop() { g.quitOnce.Do(func() { close(g.quit) }) }
+
+// dropRunning forgets the running guest of id, stopping what runs for it.
+// Callers hold e.mu.
+func (e *Engine) dropRunningLocked(id string) {
+	if g := e.running[id]; g != nil {
+		g.stop()
+		delete(e.running, id)
+	}
 }
 
 func (g *guest) release() {

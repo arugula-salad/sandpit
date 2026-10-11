@@ -140,7 +140,7 @@ func (e *Engine) RestoreCheckpoint(rec store.Record, from *engine.GuestChan, id 
 		return fmt.Errorf("substrate: DeleteActor: %w", err)
 	}
 	e.mu.Lock()
-	delete(e.running, rec.ID)
+	e.dropRunningLocked(rec.ID)
 	e.mu.Unlock()
 	e.mu.Lock()
 	tmpl := e.templates[apiOf(cur.API)]

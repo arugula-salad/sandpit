@@ -32,6 +32,9 @@ type Server struct {
 	Poweroff func()
 	// StateDir is the platform's directory on the sprite's disk; empty means /.sprite.
 	StateDir string
+	// Reverse, where there is no vsock, is the channel to sandpitd it opens
+	// into the guest (ReverseHost); nil over vsock.
+	Reverse *ReverseHost
 
 	control controlConns
 	tasks   taskTable
@@ -50,6 +53,9 @@ func (s *Server) Handler() http.Handler {
 	}
 	s.registerFS(mux)
 	s.registerTasks(mux, "/tasks")
+	if s.Reverse != nil {
+		s.Reverse.Register(mux)
+	}
 	mux.HandleFunc("GET /proxy", s.handleProxy)
 	mux.HandleFunc("GET /control", s.handleControl)
 	mux.HandleFunc("GET /ports/watch", s.handlePortsWatch)

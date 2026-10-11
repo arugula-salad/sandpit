@@ -113,12 +113,28 @@ func serve(args []string) {
 		agent.NewSystemSupervisor(dir, "/var/log/sandpit/services", "/run/sandpit-system-services")
 	}
 
-	// Service starts and crashes go to sandpitd's event stream, which only exists
-	// over vsock, and so does the sprite's environment the services start with.
+	// The channel to sandpitd: vsock in a VM; where there is none (a sandbox on
+	// Agent Substrate, --upgrade), streams sandpitd opens into the guest
+	// (agent.ReverseHost). A test listener on the host has neither.
+	var host func(context.Context) (net.Conn, error)
+	var reverse *agent.ReverseHost
+	switch {
+	case *listen == "vsock":
+		host = dialHost
+	case *upgrade:
+		reverse = agent.NewReverseHost()
+		host = reverse.Dial
+	}
+	// Service starts and crashes go to sandpitd's event stream over that channel.
+	// The sprite's environment the services start with is fetched at boot, over
+	// vsock only: a Substrate guest boots for its template's snapshot, before
+	// any sandpitd has a channel to it.
 	var report func(agent.ServiceReport)
 	var spriteEnv []string
+	if host != nil {
+		report = agent.NewReporter(host).Report
+	}
 	if *listen == "vsock" {
-		report = agent.NewReporter(dialHost).Report
 		if spriteEnv, err = agent.FetchSpriteEnv(dialHost, 5*time.Second); err != nil {
 			log.Printf("services start without the sprite's environment: %v", err)
 		}
@@ -126,6 +142,7 @@ func serve(args []string) {
 	srv := &agent.Server{
 		Sessions: agent.NewManager(),
 		StateDir: *stateDir,
+		Reverse:  reverse,
 		Services: agent.NewSpriteSupervisor(*stateDir, *runDir, report, spriteEnv),
 		Poweroff: func() {
 			unix.Sync()
@@ -136,13 +153,13 @@ func serve(args []string) {
 			}
 		},
 	}
-	// The in-guest API needs the host channel, which only exists over vsock.
-	if *listen == "vsock" {
+	// The in-guest API needs the host channel.
+	if host != nil {
 		sock := filepath.Join(*stateDir, "api.sock")
 		if gl, err := agent.ListenGuestAPI(sock); err != nil {
 			log.Printf("%s: %v", sock, err)
 		} else {
-			gs := &http.Server{Handler: srv.GuestAPI(dialHost), ReadHeaderTimeout: 10 * time.Second}
+			gs := &http.Server{Handler: srv.GuestAPI(host), ReadHeaderTimeout: 10 * time.Second}
 			go func() { log.Fatal(gs.Serve(gl)) }()
 		}
 	}

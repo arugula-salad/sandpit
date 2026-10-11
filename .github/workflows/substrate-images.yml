@@ -85,6 +85,7 @@ jobs:
         run: |
           ./scripts/build-envd.sh
           CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -o images/substrate-agent/sandpit-agent ./cmd/sandpit-agent
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags '-s -w' -o images/substrate-agent/sprite-env ./cmd/sprite-env
 
       # E2B's guest is envd alone: its userland, then images/substrate on top.
       - name: Build the E2B userland

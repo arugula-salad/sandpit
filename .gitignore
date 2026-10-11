@@ -13,3 +13,4 @@
 /e2e/providers/*/.venv/
 /e2e/providers/*/golden/.proxy-*
 /images/substrate-agent/sandpit-agent
+/images/substrate-agent/sprite-env
