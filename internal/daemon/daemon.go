@@ -161,6 +161,7 @@ func Run(name string, opts server.Options, f *Flags, extra ...Frontend) {
 	case "substrate":
 		// Sprites sleep when idle, as on Firecracker (--idle-timeout); the other
 		// APIs follow their own timeouts unless --ate-idle-suspend says otherwise.
+		f.ate.LeaseWarning = opts.LeaseWarning
 		if f.ate.IdleByAPI == nil {
 			f.ate.IdleByAPI = map[string]time.Duration{"sprites": opts.IdleTimeout}
 		}
