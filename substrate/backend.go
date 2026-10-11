@@ -2,7 +2,6 @@ package substrate
 
 import (
 	"context"
-	"net/http"
 	"time"
 
 	"github.com/arugula-salad/sandpit/engine"
@@ -95,11 +94,10 @@ func (e *Engine) UnmountCheckpoint(context.Context, store.Record, *engine.GuestC
 
 // No backups (the actor's snapshot lives in the cluster's object store) and
 // no image cache (an ActorTemplate names its image).
-func (e *Engine) BackupState(string) *engine.BackupState                         { return nil }
-func (e *Engine) SetBackupFilter(func(store.Sprite) bool)                        {}
-func (e *Engine) Images() *engine.ImageCache                                     { return nil }
-func (e *Engine) Events() *engine.Bus                                            { return e.events }
-func (e *Engine) SetGuestAPI(func(store.Record, *engine.GuestChan) http.Handler) {}
+func (e *Engine) BackupState(string) *engine.BackupState  { return nil }
+func (e *Engine) SetBackupFilter(func(store.Sprite) bool) {}
+func (e *Engine) Images() *engine.ImageCache              { return nil }
+func (e *Engine) Events() *engine.Bus                     { return e.events }
 
 // Emit publishes an event about rec, named by the describer as the
 // Firecracker engine's are.

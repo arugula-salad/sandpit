@@ -17,5 +17,8 @@ RUN mkdir -p /etc/sandpit && find / -xdev \( ! -uid 0 -o ! -gid 0 -o -perm /7000
       -printf '%U %G %m %p\n' > /etc/sandpit/image-perms
 COPY --chmod=0755 substrate/sandpit-fixperms /usr/local/sbin/sandpit-fixperms
 COPY --chmod=0755 substrate-agent/sandpit-agent /usr/local/sbin/sandpit-agent
+# The in-guest CLI, where a Firecracker guest's agent installs it from the initramfs.
+COPY --chmod=0755 substrate-agent/sprite-env /.sprite/bin/sprite-env
+RUN ln -sf /.sprite/bin/sprite-env /usr/local/bin/sprite-env
 ENTRYPOINT ["/usr/local/sbin/sandpit-fixperms", "/usr/local/sbin/sandpit-agent", "serve", \
   "--listen", "tcp:0.0.0.0:2024", "--upgrade", "--claim", "--system-services"]
