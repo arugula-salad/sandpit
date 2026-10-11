@@ -9,47 +9,10 @@
 # credentials, and the sandpit namespace has no pull secret.
 name: substrate-images
 
+# Manual only since 2026-10-11: the Substrate deployment is torn down
+# (arugula-salad/fleet#13, home-cloud#217). Run it by hand if that is ever reverted.
 on:
   workflow_dispatch:
-  pull_request:
-    paths:
-      - "cmd/sandpit-kube/**"
-      - "cmd/sandpitd/**"
-      - "internal/**"
-      - "frontend/**"
-      - "substrate/**"
-      - "engine/**"
-      - "images/e2b/**"
-      - "images/substrate/**"
-      - "images/substrate-agent/**"
-      - "images/base/**"
-      - "images/vercel/**"
-      - "images/daytona/**"
-      - "images/sandpit-kube/**"
-      - "scripts/build-envd.sh"
-      - "go.mod"
-      - "go.sum"
-      - ".github/workflows/substrate-images.yml"
-  push:
-    branches: [main]
-    paths:
-      - "cmd/sandpit-kube/**"
-      - "cmd/sandpitd/**"
-      - "internal/**"
-      - "frontend/**"
-      - "substrate/**"
-      - "engine/**"
-      - "images/e2b/**"
-      - "images/substrate/**"
-      - "images/substrate-agent/**"
-      - "images/base/**"
-      - "images/vercel/**"
-      - "images/daytona/**"
-      - "images/sandpit-kube/**"
-      - "scripts/build-envd.sh"
-      - "go.mod"
-      - "go.sum"
-      - ".github/workflows/substrate-images.yml"
 
 concurrency:
   group: substrate-images-${{ github.ref }}
