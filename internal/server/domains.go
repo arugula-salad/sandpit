@@ -147,7 +147,7 @@ func (s *Server) attachDomain(w http.ResponseWriter, r *http.Request) {
 			Message: fmt.Sprintf("%s already has %d custom domains, the most it allows; detach one first", what, n)})
 		return
 	case err != nil:
-		writeErr(w, http.StatusInternalServerError, "internal", err.Error())
+		writeInternalErr(w, err)
 		return
 	}
 	status := http.StatusOK
@@ -170,7 +170,7 @@ func (s *Server) detachDomain(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusNotFound, "not_found", "domain not attached to this sprite")
 			return
 		}
-		writeErr(w, http.StatusInternalServerError, "internal", err.Error())
+		writeInternalErr(w, err)
 		return
 	}
 	s.log.Info("custom domain detached", "sprite", sp.Name, "domain", d)

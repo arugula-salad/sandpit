@@ -271,6 +271,9 @@ func (e *Engine) RestoreCheckpoint(rec store.Record, from *engine.GuestChan, id 
 	if err := e.createActor(ctx, rec.ID, tmpl, e.tagRef(rec.ID, id)); err != nil {
 		return err
 	}
+	if err := e.reapplyEgress(rec.ID); err != nil {
+		e.log.Error("network policy on the restored actor", "id", rec.ID, "err", err)
+	}
 	info("Restored from %s in %s", id, time.Since(start).Round(time.Millisecond))
 	lineage := append([]string{id}, target.History...)
 	cur, _ = e.store.UpdateRecord(rec.ID, func(r *store.Record) { r.Lineage = lineage })

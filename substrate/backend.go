@@ -5,7 +5,6 @@ import (
 	"time"
 
 	"github.com/arugula-salad/sandpit/engine"
-	"github.com/arugula-salad/sandpit/internal/netpolicy"
 	"github.com/arugula-salad/sandpit/internal/store"
 )
 
@@ -86,12 +85,6 @@ func (e *Engine) ApplyPolicy(ctx context.Context, rec store.Record) error {
 	}
 	return g.pushPolicy(ctx, rec.ID)
 }
-
-func (e *Engine) SetNetworkPolicy(string, []store.NetworkRule, *netpolicy.Policy) error {
-	return engine.ErrUnsupported
-}
-
-func (e *Engine) RepublishNetworkPolicy(string) {}
 
 func (e *Engine) MountCheckpoint(context.Context, store.Record, *engine.GuestChan, string) (int, error) {
 	return 0, engine.ErrUnsupported

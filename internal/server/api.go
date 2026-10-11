@@ -276,6 +276,16 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	json.NewEncoder(w).Encode(v)
 }
 
+// writeInternalErr is the answer for an error a handler has no case for: 501
+// for something this backend can't do (engine.ErrUnsupported), else 500.
+func writeInternalErr(w http.ResponseWriter, err error) {
+	if errors.Is(err, engine.ErrUnsupported) {
+		writeErr(w, http.StatusNotImplemented, "not_supported", err.Error())
+		return
+	}
+	writeErr(w, http.StatusInternalServerError, "internal", err.Error())
+}
+
 func writeErr(w http.ResponseWriter, status int, code, msg string) {
 	writeJSON(w, status, map[string]string{"error": code, "message": msg})
 }
@@ -478,7 +488,7 @@ func (s *Server) create(w http.ResponseWriter, r *http.Request, parent *store.Sp
 		writeErr(w, http.StatusBadRequest, "name_taken", "a sprite with that name already exists")
 		return
 	case err != nil:
-		writeErr(w, http.StatusInternalServerError, "internal", err.Error())
+		writeInternalErr(w, err)
 		return
 	}
 	writeJSON(w, http.StatusCreated, s.render(created))
@@ -591,7 +601,7 @@ func (s *Server) deleted(store.Sprite) { s.syncDomains() }
 
 func (s *Server) remove(w http.ResponseWriter, sp store.Sprite) {
 	if err := s.life.Delete(sp.Record); err != nil {
-		writeErr(w, http.StatusInternalServerError, "internal", err.Error())
+		writeInternalErr(w, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
