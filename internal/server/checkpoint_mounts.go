@@ -35,7 +35,7 @@ func (s *Server) mountCheckpoint(w http.ResponseWriter, r *http.Request, sp stor
 	case errors.Is(err, engine.ErrNoSlots):
 		writeErr(w, http.StatusConflict, "no_slots", err.Error())
 	default:
-		writeErr(w, http.StatusInternalServerError, "internal", err.Error())
+		writeInternalErr(w, err)
 	}
 }
 
@@ -48,6 +48,6 @@ func (s *Server) unmountCheckpoint(w http.ResponseWriter, r *http.Request, sp st
 	case errors.Is(err, store.ErrNotFound):
 		writeErr(w, http.StatusNotFound, "not_found", "sprite not found")
 	default:
-		writeErr(w, http.StatusInternalServerError, "internal", err.Error())
+		writeInternalErr(w, err)
 	}
 }

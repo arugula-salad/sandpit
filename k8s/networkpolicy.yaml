@@ -1,0 +1,37 @@
+# Sandboxes reach the network through their worker pod: home-cloud's Substrate
+# has no egress gateway (it carries HTTP(S) only), and its atunnel dials each
+# actor connection's destination from the worker (platform/agent-substrate,
+# patch 0004). A sandbox runs anyone's code, so like home-cloud's CI runners
+# (#170): DNS from CoreDNS, and public addresses only. Not the API server,
+# Substrate's own API, Infisical, Postgres, Garage, the nodes, the LAN or the
+# tailnet. Ingress stays open: the router and atelet reach the workers.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: sandbox-workers-internet-only
+spec:
+  podSelector:
+    matchExpressions:
+      - {key: ate.dev/worker-pool, operator: Exists}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - {protocol: UDP, port: 53}
+        - {protocol: TCP, port: 53}
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8        # pods 10.42/16, Services 10.43/16
+              - 172.16.0.0/12
+              - 192.168.0.0/16    # the LAN: nodes, the ingress VIP, everything at home
+              - 100.64.0.0/10     # the tailnet
+              - 169.254.0.0/16    # link-local
+              - 127.0.0.0/8

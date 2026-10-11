@@ -108,7 +108,7 @@ func (s *Server) deleteCheckpoint(w http.ResponseWriter, r *http.Request, sp sto
 	case errors.Is(err, engine.ErrNoCheckpoint):
 		writeErr(w, http.StatusNotFound, "not_found", "checkpoint not found")
 	default:
-		writeErr(w, http.StatusInternalServerError, "internal", err.Error())
+		writeInternalErr(w, err)
 	}
 }
 

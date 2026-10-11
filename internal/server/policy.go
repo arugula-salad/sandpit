@@ -45,7 +45,7 @@ func (s *Server) setNetworkPolicy(w http.ResponseWriter, r *http.Request) {
 		s.log.Warn("restrictive network policy refused", "sprite", r.PathValue("name"), "err", err)
 		writeErr(w, http.StatusServiceUnavailable, "policy_unenforceable", err.Error())
 	case err != nil:
-		writeErr(w, http.StatusInternalServerError, "internal", err.Error())
+		writeInternalErr(w, err)
 	default:
 		s.log.Info("network policy set", "sprite", r.PathValue("name"), "rules", len(req.Rules), "restricted", policy.Restrictive())
 		if sp, err := s.store.Get(sp.ID); err == nil {

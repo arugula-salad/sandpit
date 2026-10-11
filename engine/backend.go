@@ -64,3 +64,13 @@ var _ Backend = (*Engine)(nil)
 
 // NewBus makes an event bus, for a Backend other than *Engine.
 func NewBus() *Bus { return newBus() }
+
+// AgentCall makes one call to a guest's sandpit-agent API, for a Backend other
+// than *Engine.
+func AgentCall(ctx context.Context, g Guest, method, path string, body any, out any) error {
+	return agentCall(ctx, g, method, path, body, out)
+}
+
+// GuestPolicyFor is the policy sandpit-agent enforces for rec (POST
+// /internal/policy), for a Backend other than *Engine to push.
+func GuestPolicyFor(rec store.Record) any { return guestPolicyFor(rec) }

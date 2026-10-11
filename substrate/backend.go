@@ -5,7 +5,6 @@ import (
 	"time"
 
 	"github.com/arugula-salad/sandpit/engine"
-	"github.com/arugula-salad/sandpit/internal/netpolicy"
 	"github.com/arugula-salad/sandpit/internal/store"
 )
 
@@ -75,14 +74,17 @@ func (e *Engine) SetPolicy(id string, p store.LifecyclePolicy) (store.Record, er
 	})
 }
 
-// ApplyPolicy has nothing to push into a guest.
-func (e *Engine) ApplyPolicy(context.Context, store.Record) error { return nil }
-
-func (e *Engine) SetNetworkPolicy(string, []store.NetworkRule, *netpolicy.Policy) error {
-	return engine.ErrUnsupported
+// ApplyPolicy pushes the sandbox's policy (its privileges and resources
+// profile) into its agent if it is running; a resume pushes it too.
+func (e *Engine) ApplyPolicy(ctx context.Context, rec store.Record) error {
+	e.mu.Lock()
+	g := e.running[rec.ID]
+	e.mu.Unlock()
+	if g == nil || g.agentToken == "" {
+		return nil
+	}
+	return g.pushPolicy(ctx, rec.ID)
 }
-
-func (e *Engine) RepublishNetworkPolicy(string) {}
 
 func (e *Engine) MountCheckpoint(context.Context, store.Record, *engine.GuestChan, string) (int, error) {
 	return 0, engine.ErrUnsupported
@@ -102,14 +104,22 @@ func (e *Engine) Events() *engine.Bus                     { return e.events }
 // Emit publishes an event about rec, named by the describer as the
 // Firecracker engine's are.
 func (e *Engine) Emit(rec store.Record, typ string, detail map[string]any) {
-	ev := engine.Event{Type: typ, SpriteID: rec.ID, Detail: detail}
+	sp, err := e.store.Get(rec.ID)
+	if err != nil {
+		sp = store.Sprite{Record: rec}
+	}
+	e.emitFor(sp, typ, detail)
+}
+
+// emitFor is Emit for a sprite in hand: one being deleted is no longer in the
+// store to be described from.
+func (e *Engine) emitFor(sp store.Sprite, typ string, detail map[string]any) {
+	ev := engine.Event{Type: typ, SpriteID: sp.ID, Detail: detail}
 	e.mu.Lock()
 	d := e.describer
 	e.mu.Unlock()
 	if d != nil {
-		if sp, err := e.store.Get(rec.ID); err == nil {
-			ev.Sprite, ev.ParentID = d(sp)
-		}
+		ev.Sprite, ev.ParentID = d(sp)
 	}
 	e.events.Publish(ev)
 }

@@ -85,6 +85,13 @@ type Options struct {
 	// "e2b", ...): the Sprites API's are suspended after sandpitd's
 	// --idle-timeout, as Firecracker's are. 0 never does.
 	IdleByAPI map[string]time.Duration
+	// LeaseWarning is how long before a deleting deadline sprite.expiring is
+	// published (sandpitd's --lease-warning); 0 is 5 minutes.
+	LeaseWarning time.Duration
+	// AutoCheckpointKeep is how many automatic checkpoints (the state a restore
+	// replaced) are kept per sandbox (sandpitd's --auto-checkpoint-keep); 0
+	// takes none.
+	AutoCheckpointKeep int
 }
 
 // Engine runs sandboxes as Substrate actors. It satisfies e2b.Engine.
@@ -101,7 +108,9 @@ type Engine struct {
 	onBoot  []engine.BootHook
 	quit    chan struct{}
 
-	templates map[string]string // API -> ActorTemplate, once it is ready; guarded by mu
+	templates map[string]string        // API -> ActorTemplate, once it is ready; guarded by mu
+	warned    map[string]time.Time     // the deadline sprite.expiring went out for; guarded by mu
+	pending   map[string]chan struct{} // "<sandbox>/<checkpoint>" asked for from inside, not yet taken; guarded by mu
 	events    *engine.Bus
 	onDelete  []func(store.Sprite)
 	describer engine.Describer
@@ -129,7 +138,7 @@ func New(opts Options, st *store.Store, log *slog.Logger) (*Engine, error) {
 	}
 	e := &Engine{opts: opts, store: st, log: log.With("engine", "substrate"), api: ateapipb.NewControlClient(conn), conn: conn,
 		locks: map[string]*sync.Mutex{}, running: map[string]*guest{}, quit: make(chan struct{}),
-		events: engine.NewBus()}
+		events: engine.NewBus(), warned: map[string]time.Time{}, pending: map[string]chan struct{}{}}
 	e.templates = map[string]string{"e2b": opts.Template}
 	ensure := func(api, base, file string) error {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
@@ -284,6 +293,7 @@ func (e *Engine) Create(ctx context.Context, spec engine.CreateSpec) (store.Spri
 		e.store.Delete(sp.ID)
 		return sp, err
 	}
+	e.Emit(sp.Record, "sprite.created", map[string]any{"cloned": spec.Checkpoint != nil})
 	e.log.Info("sandbox created", "id", sp.ID, "api", sp.API)
 	return sp, nil
 }
@@ -313,6 +323,7 @@ func (e *Engine) Delete(rec store.Record) error {
 		return err
 	}
 	e.log.Info("sandbox deleted", "id", rec.ID)
+	e.emitFor(sp, "sprite.deleted", nil)
 	e.mu.Lock()
 	hooks := e.onDelete
 	e.mu.Unlock()
@@ -326,6 +337,8 @@ func (e *Engine) Delete(rec store.Record) error {
 // returns it, counting the use until release for the idle rule. A running
 // actor costs no API call: the router resumes one Substrate itself suspended.
 func (e *Engine) Acquire(ctx context.Context, rec store.Record) (engine.Guest, func(), error) {
+	// A checkpoint the guest asked for is taken before anything else reaches it.
+	e.waitAllPending(rec.ID)
 	if g := e.use(rec.ID); g != nil {
 		return g, g.release, nil
 	}
@@ -364,10 +377,18 @@ func (e *Engine) Acquire(ctx context.Context, rec store.Record) (engine.Guest, f
 		raw, _ := json.Marshal(x)
 		e.store.UpdateRecord(rec.ID, func(r *store.Record) { r.Ext[extKey] = raw })
 	}
+	// The policy may have changed while it slept, and a template's snapshot
+	// has none: push it before anything runs in the sandbox.
+	if g.agentToken != "" {
+		if err := g.pushPolicy(ctx, rec.ID); err != nil {
+			e.log.Warn("pushing the policy into the guest", "id", rec.ID, "err", err)
+		}
+	}
 	e.mu.Lock()
 	e.running[rec.ID] = g
 	e.mu.Unlock()
 	go e.keepHostChannel(g, cur)
+	e.Emit(cur, "sprite.woke", map[string]any{"ms": time.Since(start).Milliseconds(), "warm": warm})
 	e.log.Info("sandbox resumed", "id", rec.ID, "warm", warm, "resumed", resp.GetResumed(),
 		"worker", resp.GetActor().GetStatus().GetWorkerAssignment().String(), "took", time.Since(start).Round(time.Millisecond))
 	g.inflight++
@@ -404,6 +425,13 @@ func (e *Engine) suspendLocked(id, why string) error {
 	e.dropRunningLocked(id)
 	e.mu.Unlock()
 	e.log.Info("sandbox suspended", "id", id, "why", why, "took", time.Since(start).Round(time.Millisecond))
+	if rec, err := e.store.GetRecord(id); err == nil {
+		detail := map[string]any{"ms": time.Since(start).Milliseconds(), "idle": why == "idle"}
+		if why == "deadline" {
+			detail["reason"] = why
+		}
+		e.Emit(rec, "sprite.suspended", detail)
+	}
 	return nil
 }
 
@@ -454,40 +482,89 @@ func (e *Engine) janitor() {
 		}
 		now := time.Now()
 		for _, rec := range e.store.Records() {
-			if _, ok := rec.Ext[extKey]; !ok || rec.ExpiresAt == nil || rec.Protected || now.Before(*rec.ExpiresAt) {
+			if _, ok := rec.Ext[extKey]; !ok || rec.ExpiresAt == nil || rec.Protected {
+				continue
+			}
+			if now.Before(*rec.ExpiresAt) {
+				e.warnExpiring(rec, now)
 				continue
 			}
 			if rec.Lifecycle.OnDeadline() == store.DeadlineDelete {
 				e.log.Info("deadline passed; deleting", "id", rec.ID)
+				e.Emit(rec, "sprite.expired", map[string]any{"expires_at": rec.ExpiresAt.UTC().Format(time.RFC3339)})
 				if err := e.Delete(rec); err != nil && !errors.Is(err, store.ErrNotFound) {
 					e.log.Warn("delete at the deadline", "id", rec.ID, "err", err)
 				}
 				continue
 			}
-			if err := e.Suspend(rec); err != nil {
+			unlock := e.lock(rec.ID)
+			if err := e.suspendLocked(rec.ID, "deadline"); err != nil {
 				e.log.Warn("suspend at the deadline", "id", rec.ID, "err", err)
 			}
+			unlock()
 			e.store.UpdateRecord(rec.ID, func(r *store.Record) { r.ExpiresAt = nil })
 		}
 		e.mu.Lock()
-		var idle []string
+		type cand struct {
+			id    string
+			api   string
+			quiet time.Duration
+		}
+		var idle []cand
 		for id, g := range e.running {
-			if d := e.idleFor(g.api); d > 0 && g.inflight == 0 && now.Sub(g.lastUse) >= d {
-				idle = append(idle, id)
+			if g.inflight == 0 && !g.checking {
+				idle = append(idle, cand{id, g.api, now.Sub(g.lastUse)})
 			}
 		}
 		e.mu.Unlock()
-		for _, id := range idle {
-			go e.idleSuspend(id)
+		for _, c := range idle {
+			// The sandbox's own lifecycle policy (a Daytona auto-stop, say) over
+			// its API's default, as the Firecracker engine's idle rule has it.
+			rec, err := e.store.GetRecord(c.id)
+			if err != nil {
+				continue
+			}
+			timeout, action := rec.Lifecycle.Idle(e.idleFor(c.api))
+			if action == store.IdleNone || timeout <= 0 || c.quiet < timeout {
+				continue
+			}
+			go e.idleSuspend(c.id, timeout)
 		}
 	}
 }
 
-func (e *Engine) idleSuspend(id string) {
-	defer e.lock(id)()
+func (e *Engine) idleSuspend(id string, timeout time.Duration) {
 	e.mu.Lock()
 	g := e.running[id]
-	busy := g == nil || g.inflight > 0 || e.idleFor(g.api) <= 0 || time.Since(g.lastUse) < e.idleFor(g.api)
+	if g == nil || g.checking {
+		e.mu.Unlock()
+		return
+	}
+	g.checking = true
+	e.mu.Unlock()
+	defer func() {
+		e.mu.Lock()
+		g.checking = false
+		e.mu.Unlock()
+	}()
+	// What the guest says it is doing: a task or a keep-awake service holds
+	// it, and so does an attached session; its own idle clock counts too.
+	if g.agentToken != "" {
+		var act struct {
+			IdleMS   int64 `json:"idle_ms"`
+			Attached int   `json:"attached_sessions"`
+			Tasks    int   `json:"tasks"`
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		err := engine.AgentCall(ctx, g, http.MethodGet, "/internal/activity", nil, &act)
+		cancel()
+		if err != nil || act.Tasks > 0 || act.Attached > 0 || time.Duration(act.IdleMS)*time.Millisecond < timeout {
+			return
+		}
+	}
+	defer e.lock(id)()
+	e.mu.Lock()
+	busy := e.running[id] != g || g.inflight > 0 || time.Since(g.lastUse) < timeout
 	e.mu.Unlock()
 	if busy {
 		return
@@ -495,6 +572,27 @@ func (e *Engine) idleSuspend(id string) {
 	if err := e.suspendLocked(id, "idle"); err != nil {
 		e.log.Warn("idle suspend", "id", id, "err", err)
 	}
+}
+
+// warnExpiring publishes sprite.expiring once per deadline, LeaseWarning
+// before a deadline that deletes, as the Firecracker engine's leases do.
+func (e *Engine) warnExpiring(rec store.Record, now time.Time) {
+	warn := e.opts.LeaseWarning
+	if warn <= 0 {
+		warn = 5 * time.Minute
+	}
+	if rec.Lifecycle.OnDeadline() != store.DeadlineDelete || rec.ExpiresAt.Sub(now) > warn {
+		return
+	}
+	e.mu.Lock()
+	if e.warned[rec.ID].Equal(*rec.ExpiresAt) {
+		e.mu.Unlock()
+		return
+	}
+	e.warned[rec.ID] = *rec.ExpiresAt
+	e.mu.Unlock()
+	e.Emit(rec, "sprite.expiring", map[string]any{"expires_at": rec.ExpiresAt.UTC().Format(time.RFC3339),
+		"seconds_left": int(rec.ExpiresAt.Sub(now).Seconds())})
 }
 
 // idleFor is how long a sandbox of api may sit idle before it is suspended.
@@ -513,10 +611,22 @@ type guest struct {
 	agentToken string    // empty: no agent in this guest
 	inflight   int       // guarded by e.mu
 	lastUse    time.Time // guarded by e.mu
+	checking   bool      // an idle check is asking the guest; guarded by e.mu
 	// quit closes when this is no longer the running guest (suspended,
 	// deleted or replaced), ending what runs on its behalf.
 	quit     chan struct{}
 	quitOnce sync.Once
+}
+
+// pushPolicy hands the guest's agent the sandbox's current policy.
+func (g *guest) pushPolicy(ctx context.Context, id string) error {
+	rec, err := g.e.store.GetRecord(id)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	return engine.AgentCall(ctx, g, http.MethodPost, "/internal/policy", engine.GuestPolicyFor(rec), nil)
 }
 
 func (g *guest) stop() { g.quitOnce.Do(func() { close(g.quit) }) }
